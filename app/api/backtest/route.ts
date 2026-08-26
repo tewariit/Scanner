@@ -1,4 +1,4 @@
-import { analyze, detectStructure, fetchChart, resampleFourHour, structureEntryScore, universe, type Candle } from "@/lib/technical-engine";
+import { analyze, detectStructure, fetchChart, marketUniverses, resampleFourHour, structureEntryScore, type Candle, type MarketUniverseKey } from "@/lib/technical-engine";
 
 type Trade = {
   symbol: string; signal: "MTF Pullback"; score: number; entryTime: number; exitTime: number;
@@ -11,11 +11,24 @@ type Funnel = { structureReady: number; mtfAligned: number; scorePassed: number 
 const FEE_RATE = 0.0015;
 const HOLDING_BARS = 20;
 
-function bangkokDate(time: number) {
-  return new Date((time + 7 * 3600) * 1000).toISOString().slice(0, 10);
+const marketMeta: Record<MarketUniverseKey, { label: string; assetLabel: string; timeZone: string }> = {
+  thai: { label: "หุ้นไทย", assetLabel: "หุ้น", timeZone: "Asia/Bangkok" },
+  global: { label: "หุ้นโลก", assetLabel: "หุ้น", timeZone: "America/New_York" },
+  etf: { label: "ETF / กองทุน", assetLabel: "กองทุน", timeZone: "America/New_York" },
+  crypto: { label: "คริปโต", assetLabel: "เหรียญ", timeZone: "UTC" },
+};
+
+function resolveMarket(value: string | null): MarketUniverseKey {
+  return value === "global" || value === "etf" || value === "crypto" ? value : "thai";
 }
 
-function simulateTrade(symbol: string, score: number, candles: Candle[], signalIndex: number, currentAtr: number): Trade | null {
+function marketDate(time: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(time * 1000));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function simulateTrade(symbol: string, score: number, candles: Candle[], signalIndex: number, currentAtr: number, timeZone: string): Trade | null {
   const entryIndex = signalIndex + 1;
   const entryCandle = candles[entryIndex];
   if (!entryCandle || currentAtr <= 0) return null;
@@ -39,12 +52,12 @@ function simulateTrade(symbol: string, score: number, candles: Candle[], signalI
   if (outcome === "TIME") outcome = resultR > 0 ? "WIN" : "LOSS";
   return {
     symbol, signal: "MTF Pullback", score, entryTime: entryCandle.time, exitTime: candles[exitIndex].time,
-    date: bangkokDate(entryCandle.time), exitDate: bangkokDate(candles[exitIndex].time),
+    date: marketDate(entryCandle.time, timeZone), exitDate: marketDate(candles[exitIndex].time, timeZone),
     entry, stop, target, resultR, outcome, holdBars: exitIndex - entryIndex + 1,
   };
 }
 
-function generateCandidates(symbol: string, name: string, sector: string, hourly: Candle[], daily: Candle[], cutoff: number) {
+function generateCandidates(symbol: string, name: string, sector: string, hourly: Candle[], daily: Candle[], cutoff: number, timeZone: string) {
   const candidates: Trade[] = [];
   const funnel: Funnel = { structureReady: 0, mtfAligned: 0, scorePassed: 0 };
   let wasReady = false;
@@ -58,8 +71,8 @@ function generateCandidates(symbol: string, name: string, sector: string, hourly
     if (!isFreshReady || time < cutoff) continue;
     funnel.structureReady += 1;
 
-    const currentDay = bangkokDate(time);
-    const d1Candles = daily.filter((candle) => bangkokDate(candle.time) < currentDay);
+    const currentDay = marketDate(time, timeZone);
+    const d1Candles = daily.filter((candle) => marketDate(candle.time, timeZone) < currentDay);
     const h4Candles = resampleFourHour(h1Candles);
     if (d1Candles.length < 55 || h4Candles.length < 55 || h1Candles.length < 55) continue;
     const d1 = analyze(symbol, name, sector, d1Candles);
@@ -72,7 +85,7 @@ function generateCandidates(symbol: string, name: string, sector: string, hourly
     const trendScore = Math.round(d1.trendScore * .45 + h4.trendScore * .35 + h1.trendScore * .2);
     const entryScore = structureEntryScore(structure, h1.rsi, h1.volume);
     const score = Math.round(trendScore * .6 + entryScore * .4);
-    const trade = simulateTrade(symbol, score, hourly, index, h1.atr);
+    const trade = simulateTrade(symbol, score, hourly, index, h1.atr, timeZone);
     if (trade) candidates.push(trade);
   }
   return { candidates, funnel };
@@ -119,20 +132,23 @@ function groupMetrics(trades: Trade[], key: "signal" | "symbol") {
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
+  const market = resolveMarket(params.get("market"));
+  const meta = marketMeta[market];
+  const instruments = marketUniverses[market];
   const months = [3, 6, 12].includes(Number(params.get("months"))) ? Number(params.get("months")) : 12;
   const minScore = [60, 70, 80].includes(Number(params.get("score"))) ? Number(params.get("score")) : 70;
   const cutoff = Math.floor(Date.now() / 1000) - months * 30.4375 * 86400;
   try {
-    const settled = await Promise.allSettled(universe.map(async ([symbol, name, sector]) => {
+    const settled = await Promise.allSettled(instruments.map(async ([symbol, ticker, name, sector]) => {
       const [hourly, daily] = await Promise.all([
-        fetchChart(`${symbol}.BK`, "60m", "1y", 3600),
-        fetchChart(`${symbol}.BK`, "1d", "2y", 3600),
+        fetchChart(ticker, "60m", "1y", 3600),
+        fetchChart(ticker, "1d", "2y", 3600),
       ]);
       if (hourly.length < 180 || daily.length < 120) throw new Error("insufficient MTF history");
-      return generateCandidates(symbol, name, sector, hourly, daily, cutoff);
+      return generateCandidates(symbol, name, sector, hourly, daily, cutoff, meta.timeZone);
     }));
     const results = settled.flatMap((item) => item.status === "fulfilled" ? [item.value] : []);
-    if (results.length < 5) throw new Error("ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอสำหรับ MTF Backtest");
+    if (results.length < Math.min(5, instruments.length)) throw new Error(`ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอสำหรับ Backtest ${meta.label}`);
     const candidates = results.flatMap((item) => item.candidates);
     const funnel = results.reduce((sum, item) => ({
       structureReady: sum.structureReady + item.funnel.structureReady,
@@ -143,8 +159,9 @@ export async function GET(request: Request) {
     const trades = selectPortfolio(candidates, minScore);
     const comparisons = [60, 70, 80].map((score) => ({ score, ...metrics(selectPortfolio(candidates, score)) }));
     return Response.json({
+      market: { key: market, label: meta.label, assetLabel: meta.assetLabel },
       assumptions: { months, timeframe: "D1 / H4 / H1", minScore, rr: 2, atrStop: 1.2, maxTradesPerDay: 2, holdingBars: HOLDING_BARS, feeRate: FEE_RATE, entry: "next_h1_open", sameBarRule: "stop_first", structure: "CHoCH → BOS → Pullback" },
-      coverage: { requested: universe.length, succeeded: results.length }, funnel,
+      coverage: { requested: instruments.length, succeeded: results.length }, funnel,
       metrics: metrics(trades), comparisons, bySignal: groupMetrics(trades, "signal"), byStock: groupMetrics(trades, "symbol").slice(0, 10),
       recentTrades: trades.slice(-12).reverse(), source: "Yahoo Finance 60m + daily · reference only", generatedAt: Date.now(),
     }, { headers: { "Cache-Control": "public, max-age=300, s-maxage=3600" } });
