@@ -1,4 +1,4 @@
-import { analyze, detectStructure, fetchChart, resampleFourHour, universe } from "@/lib/technical-engine";
+import { analyze, detectStructure, fetchChart, resampleFourHour, structureEntryScore, universe } from "@/lib/technical-engine";
 
 const intervalConfig = {
   day: { interval: "1d", range: "6mo", minBars: 55 },
@@ -51,9 +51,7 @@ async function multiTimeframeScan() {
         (d1.bias === "BEARISH" && (h4.bias === "BULLISH" || h1.bias === "BULLISH"));
       const aligned = d1.bias === "BULLISH" && h4.bias === "BULLISH" && h1.bias === "BULLISH";
       const trendScore = Math.round(d1.trendScore * .45 + h4.trendScore * .35 + h1.trendScore * .2);
-      const entryScore = Math.min(100,
-        (structure.choch ? 25 : 0) + (structure.bos ? 30 : 0) + (structure.pullback ? 30 : 0) +
-        (h1.rsi >= 50 && h1.rsi <= 70 ? 10 : 0) + (h1.volume >= 1 ? 5 : 0));
+      const entryScore = structureEntryScore(structure, h1.rsi, h1.volume);
       const score = Math.round(trendScore * .6 + entryScore * .4);
       const state = conflict ? "WAIT" : aligned && structure.stage === "ENTRY_READY" && score >= 70 ? "TRADE" : d1.bias === "BEARISH" && h4.bias === "BEARISH" ? "NO_TRADE" : "WAIT";
       const summary = conflict ? "โครงสร้างต่างกรอบขัดกัน — รอให้ H4/H1 กลับมาไปทางเดียวกับ D1" : aligned ? "D1, H4 และ H1 อยู่ฝั่งขาขึ้นเดียวกัน" : state === "NO_TRADE" ? "D1 และ H4 เป็นขาลง — ยังไม่มี Long edge" : "แนวโน้มยังไม่ครบ 3 กรอบ — รอการยืนยัน";

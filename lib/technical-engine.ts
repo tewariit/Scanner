@@ -116,6 +116,15 @@ export function detectStructure(candles: Candle[]) {
   };
 }
 
+export function structureEntryScore(structure: ReturnType<typeof detectStructure>, rsiValue: number, volumeRatio: number) {
+  return Math.min(100,
+    (structure.choch ? 25 : 0) +
+    (structure.bos ? 30 : 0) +
+    (structure.pullback ? 30 : 0) +
+    (rsiValue >= 50 && rsiValue <= 70 ? 10 : 0) +
+    (volumeRatio >= 1 ? 5 : 0));
+}
+
 export function analyze(symbol: string, name: string, sector: string, candles: Candle[]) {
   const closes = candles.map((candle) => candle.close);
   const volumes = candles.map((candle) => candle.volume);

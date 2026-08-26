@@ -1,15 +1,21 @@
-import { analyze, fetchChart, universe, type Candle, type Signal } from "@/lib/technical-engine";
+import { analyze, detectStructure, fetchChart, resampleFourHour, structureEntryScore, universe, type Candle } from "@/lib/technical-engine";
 
 type Trade = {
-  symbol: string; signal: Exclude<Signal, "Watch">; score: number; entryTime: number; exitTime: number;
+  symbol: string; signal: "MTF Pullback"; score: number; entryTime: number; exitTime: number;
   date: string; exitDate: string; entry: number; stop: number; target: number; resultR: number;
   outcome: "WIN" | "LOSS" | "TIME"; holdBars: number;
 };
 
+type Funnel = { structureReady: number; mtfAligned: number; scorePassed: number };
+
 const FEE_RATE = 0.0015;
 const HOLDING_BARS = 20;
 
-function simulateTrade(symbol: string, signal: Exclude<Signal, "Watch">, score: number, candles: Candle[], signalIndex: number, currentAtr: number): Trade | null {
+function bangkokDate(time: number) {
+  return new Date((time + 7 * 3600) * 1000).toISOString().slice(0, 10);
+}
+
+function simulateTrade(symbol: string, score: number, candles: Candle[], signalIndex: number, currentAtr: number): Trade | null {
   const entryIndex = signalIndex + 1;
   const entryCandle = candles[entryIndex];
   if (!entryCandle || currentAtr <= 0) return null;
@@ -29,31 +35,51 @@ function simulateTrade(symbol: string, signal: Exclude<Signal, "Watch">, score: 
     if (stopHit) { rawR = -1; outcome = "LOSS"; exitIndex = index; break; }
     if (targetHit) { rawR = 2; outcome = "WIN"; exitIndex = index; break; }
   }
-  const costR = (entry * FEE_RATE) / risk;
-  const resultR = Math.round((rawR - costR) * 100) / 100;
+  const resultR = Math.round((rawR - entry * FEE_RATE / risk) * 100) / 100;
   if (outcome === "TIME") outcome = resultR > 0 ? "WIN" : "LOSS";
   return {
-    symbol, signal, score, entryTime: entryCandle.time, exitTime: candles[exitIndex].time,
-    date: new Date(entryCandle.time * 1000).toISOString().slice(0, 10),
-    exitDate: new Date(candles[exitIndex].time * 1000).toISOString().slice(0, 10),
+    symbol, signal: "MTF Pullback", score, entryTime: entryCandle.time, exitTime: candles[exitIndex].time,
+    date: bangkokDate(entryCandle.time), exitDate: bangkokDate(candles[exitIndex].time),
     entry, stop, target, resultR, outcome, holdBars: exitIndex - entryIndex + 1,
   };
 }
 
-function generateCandidates(symbol: string, name: string, sector: string, candles: Candle[], cutoff: number) {
+function generateCandidates(symbol: string, name: string, sector: string, hourly: Candle[], daily: Candle[], cutoff: number) {
   const candidates: Trade[] = [];
-  for (let index = 60; index < candles.length - 1; index += 1) {
-    if (candles[index].time < cutoff) continue;
-    const result = analyze(symbol, name, sector, candles.slice(0, index + 1));
-    if (result.signal === "Watch" || result.score < 60) continue;
-    const trade = simulateTrade(symbol, result.signal, result.score, candles, index, result.atr);
+  const funnel: Funnel = { structureReady: 0, mtfAligned: 0, scorePassed: 0 };
+  let wasReady = false;
+
+  for (let index = 120; index < hourly.length - 1; index += 1) {
+    const time = hourly[index].time;
+    const h1Candles = hourly.slice(0, index + 1);
+    const structure = detectStructure(h1Candles);
+    const isFreshReady = structure.stage === "ENTRY_READY" && !wasReady;
+    wasReady = structure.stage === "ENTRY_READY";
+    if (!isFreshReady || time < cutoff) continue;
+    funnel.structureReady += 1;
+
+    const currentDay = bangkokDate(time);
+    const d1Candles = daily.filter((candle) => bangkokDate(candle.time) < currentDay);
+    const h4Candles = resampleFourHour(h1Candles);
+    if (d1Candles.length < 55 || h4Candles.length < 55 || h1Candles.length < 55) continue;
+    const d1 = analyze(symbol, name, sector, d1Candles);
+    const h4 = analyze(symbol, name, sector, h4Candles);
+    const h1 = analyze(symbol, name, sector, h1Candles);
+    const aligned = d1.bias === "BULLISH" && h4.bias === "BULLISH" && h1.bias === "BULLISH";
+    if (!aligned) continue;
+    funnel.mtfAligned += 1;
+
+    const trendScore = Math.round(d1.trendScore * .45 + h4.trendScore * .35 + h1.trendScore * .2);
+    const entryScore = structureEntryScore(structure, h1.rsi, h1.volume);
+    const score = Math.round(trendScore * .6 + entryScore * .4);
+    const trade = simulateTrade(symbol, score, hourly, index, h1.atr);
     if (trade) candidates.push(trade);
   }
-  return candidates;
+  return { candidates, funnel };
 }
 
-function selectPortfolio(candidates: Trade[], minScore: number, signal: string) {
-  const eligible = candidates.filter((trade) => trade.score >= minScore && (signal === "all" || trade.signal === signal));
+function selectPortfolio(candidates: Trade[], minScore: number) {
+  const eligible = candidates.filter((trade) => trade.score >= minScore);
   const dates = [...new Set(eligible.map((trade) => trade.date))].sort();
   const availableAfter = new Map<string, number>();
   const selected: Trade[] = [];
@@ -93,26 +119,36 @@ function groupMetrics(trades: Trade[], key: "signal" | "symbol") {
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const years = [1, 3, 5].includes(Number(params.get("years"))) ? Number(params.get("years")) : 3;
-  const minScore = [60, 70, 80].includes(Number(params.get("score"))) ? Number(params.get("score")) : 80;
-  const signal = ["all", "Breakout", "Pullback", "Momentum"].includes(params.get("signal") ?? "") ? params.get("signal")! : "all";
-  const cutoff = Math.floor(Date.now() / 1000) - years * 365.25 * 86400;
+  const months = [3, 6, 12].includes(Number(params.get("months"))) ? Number(params.get("months")) : 12;
+  const minScore = [60, 70, 80].includes(Number(params.get("score"))) ? Number(params.get("score")) : 70;
+  const cutoff = Math.floor(Date.now() / 1000) - months * 30.4375 * 86400;
   try {
     const settled = await Promise.allSettled(universe.map(async ([symbol, name, sector]) => {
-      const candles = await fetchChart(`${symbol}.BK`, "1d", "5y", 3600);
-      if (candles.length < 120) throw new Error("insufficient history");
-      return generateCandidates(symbol, name, sector, candles, cutoff);
+      const [hourly, daily] = await Promise.all([
+        fetchChart(`${symbol}.BK`, "60m", "1y", 3600),
+        fetchChart(`${symbol}.BK`, "1d", "2y", 3600),
+      ]);
+      if (hourly.length < 180 || daily.length < 120) throw new Error("insufficient MTF history");
+      return generateCandidates(symbol, name, sector, hourly, daily, cutoff);
     }));
-    const candidates = settled.flatMap((item) => item.status === "fulfilled" ? item.value : []);
-    const trades = selectPortfolio(candidates, minScore, signal);
-    const comparisons = [60, 70, 80].map((score) => ({ score, ...metrics(selectPortfolio(candidates, score, signal)) }));
+    const results = settled.flatMap((item) => item.status === "fulfilled" ? [item.value] : []);
+    if (results.length < 5) throw new Error("ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอสำหรับ MTF Backtest");
+    const candidates = results.flatMap((item) => item.candidates);
+    const funnel = results.reduce((sum, item) => ({
+      structureReady: sum.structureReady + item.funnel.structureReady,
+      mtfAligned: sum.mtfAligned + item.funnel.mtfAligned,
+      scorePassed: 0,
+    }), { structureReady: 0, mtfAligned: 0, scorePassed: 0 });
+    funnel.scorePassed = candidates.filter((trade) => trade.score >= minScore).length;
+    const trades = selectPortfolio(candidates, minScore);
+    const comparisons = [60, 70, 80].map((score) => ({ score, ...metrics(selectPortfolio(candidates, score)) }));
     return Response.json({
-      assumptions: { years, timeframe: "1D", minScore, signal, rr: 2, atrStop: 1.2, maxTradesPerDay: 2, holdingBars: HOLDING_BARS, feeRate: FEE_RATE, entry: "next_open", sameBarRule: "stop_first" },
-      coverage: { requested: universe.length, succeeded: settled.filter((item) => item.status === "fulfilled").length },
+      assumptions: { months, timeframe: "D1 / H4 / H1", minScore, rr: 2, atrStop: 1.2, maxTradesPerDay: 2, holdingBars: HOLDING_BARS, feeRate: FEE_RATE, entry: "next_h1_open", sameBarRule: "stop_first", structure: "CHoCH → BOS → Pullback" },
+      coverage: { requested: universe.length, succeeded: results.length }, funnel,
       metrics: metrics(trades), comparisons, bySignal: groupMetrics(trades, "signal"), byStock: groupMetrics(trades, "symbol").slice(0, 10),
-      recentTrades: trades.slice(-12).reverse(), source: "Yahoo Finance historical · reference only", generatedAt: Date.now(),
+      recentTrades: trades.slice(-12).reverse(), source: "Yahoo Finance 60m + daily · reference only", generatedAt: Date.now(),
     }, { headers: { "Cache-Control": "public, max-age=300, s-maxage=3600" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Backtest ไม่สำเร็จ" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ error: error instanceof Error ? error.message : "MTF Backtest ไม่สำเร็จ" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }
