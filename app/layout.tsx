@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Thai Stock Scanner",
-  description: "แดชบอร์ดสแกนหุ้นไทยเชิงเทคนิค พร้อมคะแนน สัญญาณ และกราฟราคา",
+  title: "MARKETPULSE — Global Technical Scanner",
+  description: "แดชบอร์ดสแกนหุ้นไทย หุ้นโลก ETF และคริปโต ด้วยกฎ Multi-Timeframe พร้อม Global Pulse",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 

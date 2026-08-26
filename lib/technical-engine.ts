@@ -15,6 +15,69 @@ export const universe = [
   ["TRUE", "ทรู คอร์ปอเรชั่น", "เทคโนโลยี"],
 ] as const;
 
+export type MarketUniverseKey = "thai" | "global" | "etf" | "crypto";
+export type MarketInstrument = readonly [symbol: string, ticker: string, name: string, sector: string];
+
+export const globalStocks: readonly MarketInstrument[] = [
+  ["NVDA", "NVDA", "NVIDIA", "AI & Semiconductors"],
+  ["MSFT", "MSFT", "Microsoft", "Software & Cloud"],
+  ["AAPL", "AAPL", "Apple", "Consumer Technology"],
+  ["AMZN", "AMZN", "Amazon", "Commerce & Cloud"],
+  ["GOOGL", "GOOGL", "Alphabet", "Internet & AI"],
+  ["META", "META", "Meta Platforms", "Internet & AI"],
+  ["TSLA", "TSLA", "Tesla", "Electric Vehicles"],
+  ["TSM", "TSM", "Taiwan Semiconductor ADR", "Semiconductors"],
+  ["ASML", "ASML", "ASML ADR", "Semiconductor Equipment"],
+  ["BRK.B", "BRK-B", "Berkshire Hathaway", "Diversified Financials"],
+  ["JPM", "JPM", "JPMorgan Chase", "Banking"],
+  ["V", "V", "Visa", "Payments"],
+  ["LLY", "LLY", "Eli Lilly", "Healthcare"],
+  ["WMT", "WMT", "Walmart", "Consumer Staples"],
+  ["BABA", "BABA", "Alibaba ADR", "China Internet"],
+  ["NVO", "NVO", "Novo Nordisk ADR", "Healthcare"],
+] as const;
+
+export const globalEtfs: readonly MarketInstrument[] = [
+  ["SPY", "SPY", "SPDR S&P 500 ETF", "US Large Cap"],
+  ["QQQ", "QQQ", "Invesco QQQ", "US Technology"],
+  ["DIA", "DIA", "SPDR Dow Jones ETF", "US Blue Chip"],
+  ["IWM", "IWM", "iShares Russell 2000", "US Small Cap"],
+  ["SMH", "SMH", "VanEck Semiconductor ETF", "Semiconductors"],
+  ["XLK", "XLK", "Technology Select Sector", "Technology"],
+  ["XLE", "XLE", "Energy Select Sector", "Energy"],
+  ["GLD", "GLD", "SPDR Gold Shares", "Gold"],
+  ["SLV", "SLV", "iShares Silver Trust", "Silver"],
+  ["TLT", "TLT", "iShares 20+ Year Treasury", "US Bonds"],
+  ["EEM", "EEM", "iShares Emerging Markets", "Emerging Markets"],
+  ["FXI", "FXI", "iShares China Large-Cap", "China"],
+  ["EWJ", "EWJ", "iShares MSCI Japan", "Japan"],
+  ["THD", "THD", "iShares MSCI Thailand", "Thailand"],
+  ["VNQ", "VNQ", "Vanguard Real Estate ETF", "Real Estate"],
+  ["ARKK", "ARKK", "ARK Innovation ETF", "Disruptive Innovation"],
+] as const;
+
+export const cryptoAssets: readonly MarketInstrument[] = [
+  ["BTC", "BTC-USD", "Bitcoin", "Store of Value"],
+  ["ETH", "ETH-USD", "Ethereum", "Smart Contracts"],
+  ["SOL", "SOL-USD", "Solana", "Layer 1"],
+  ["BNB", "BNB-USD", "BNB", "Exchange Ecosystem"],
+  ["XRP", "XRP-USD", "XRP", "Payments"],
+  ["ADA", "ADA-USD", "Cardano", "Layer 1"],
+  ["DOGE", "DOGE-USD", "Dogecoin", "Meme / Payments"],
+  ["AVAX", "AVAX-USD", "Avalanche", "Layer 1"],
+  ["LINK", "LINK-USD", "Chainlink", "Oracle Network"],
+  ["DOT", "DOT-USD", "Polkadot", "Interoperability"],
+  ["LTC", "LTC-USD", "Litecoin", "Payments"],
+  ["BCH", "BCH-USD", "Bitcoin Cash", "Payments"],
+] as const;
+
+export const marketUniverses = {
+  thai: universe.map(([symbol, name, sector]) => [symbol, `${symbol}.BK`, name, sector] as const),
+  global: globalStocks,
+  etf: globalEtfs,
+  crypto: cryptoAssets,
+} satisfies Record<MarketUniverseKey, readonly MarketInstrument[]>;
+
 export function ema(values: number[], period: number) {
   const k = 2 / (period + 1);
   return values.reduce((acc, value, index) => index === 0 ? value : value * k + acc * (1 - k), values[0]);
@@ -178,10 +241,10 @@ export function analyze(symbol: string, name: string, sector: string, candles: C
   };
 }
 
-export function resampleFourHour(candles: Candle[]) {
+export function resampleFourHour(candles: Candle[], timeZone = "Asia/Bangkok") {
   const sessions = new Map<string, Candle[]>();
   for (const candle of candles) {
-    const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(candle.time * 1000));
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(candle.time * 1000));
     sessions.set(date, [...(sessions.get(date) ?? []), candle]);
   }
   return [...sessions.values()].flatMap((session) => {
