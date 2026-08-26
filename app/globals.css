@@ -277,6 +277,12 @@ button { cursor: pointer; }
 .dividend-card { display: flex; gap: 10px; align-items: center; margin-top: 10px; padding: 11px 12px; border: 1px solid #594a28; border-radius: 9px; background: linear-gradient(135deg,rgba(248,195,93,.08),rgba(248,195,93,.02)); }
 .dividend-card > svg { width: 22px; color: #f8c35d; }.dividend-card small,.dividend-card strong,.dividend-card span { display: block; }
 .dividend-card small { color: #837655; font: 700 6px ui-sans-serif; letter-spacing: .09em; }.dividend-card strong { margin: 2px 0; color: #f8c35d; font: 900 19px ui-sans-serif; }.dividend-card span { color: #857b64; font-size: 7px; }
+.sort-head { display: inline-flex; width: 100%; align-items: center; gap: 5px; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; letter-spacing: inherit; text-transform: inherit; white-space: nowrap; }
+.sort-head svg { width: 10px; height: 10px; color: #46545d; transition: color .15s ease,transform .15s ease; }
+.sort-head:hover { color: #b7c1c6; }.sort-head:hover svg { color: #7e8a92; }
+.sort-head.active { color: #9bf526; }.sort-head.active svg { color: #9bf526; }
+.text-right .sort-head { justify-content: flex-end; }.text-center .sort-head { justify-content: center; }
+.sort-head:focus-visible { border-radius: 3px; outline: 1px solid #9bf526; outline-offset: 4px; }
 
 @media (max-width: 820px) {
   .scan-modes { grid-template-columns: 1fr 1fr; }.scan-modes > div { grid-column: 1/-1; min-height: 36px; }
@@ -284,4 +290,5 @@ button { cursor: pointer; }
 @media (max-width: 560px) {
   .scan-modes { grid-template-columns: 1fr; }.scan-modes > div { grid-column: auto; }.scan-modes > button { min-height: 44px; }
   .dividend-note { align-items: flex-start; }
+  .sort-head { min-height: 28px; }
 }

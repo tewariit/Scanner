@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity, BarChart3, Bitcoin, CandlestickChart, ChevronRight, Clock3, Coins,
+  Activity, ArrowDown, ArrowUp, ArrowUpDown, BarChart3, Bitcoin, CandlestickChart, ChevronRight, Clock3, Coins,
   Gauge, Globe2, LayoutDashboard, ListFilter, Radar, RefreshCw, Search, Settings,
   Star, Target, TrendingDown, TrendingUp, Zap,
 } from "lucide-react";
@@ -17,6 +17,8 @@ import { TradingChart } from "@/components/trading-chart";
 
 type MarketKey = "thai" | "global" | "etf" | "crypto";
 type TradeState = "TRADE" | "WAIT" | "NO_TRADE";
+type SortKey = "symbol" | "price" | "signal" | "trend" | "rsi" | "metric" | "score";
+type SortDirection = "asc" | "desc";
 type Stock = {
   symbol: string; name: string; sector: string; price: number; change: number;
   score: number; signal: "Breakout" | "Pullback" | "Momentum" | "Watch"; rsi: number;
@@ -77,6 +79,11 @@ function ScoreRing({ score }: { score: number }) {
 function BiasBadge({ label, bias, score, compact = false }: { label: string; bias: "BULLISH" | "BEARISH" | "NEUTRAL"; score: number; compact?: boolean }) {
   return <span className={`bias-badge ${bias.toLowerCase()} ${compact ? "compact" : ""}`}><small>{label}</small><i/>{compact ? null : <b>{bias === "BULLISH" ? "ขึ้น" : bias === "BEARISH" ? "ลง" : "กลาง"}</b>}<em>{score}</em></span>;
 }
+function SortableHead({ label, sortKey, activeKey, direction, onSort, className = "" }: { label: string; sortKey: SortKey; activeKey: SortKey; direction: SortDirection; onSort: (key: SortKey) => void; className?: string }) {
+  const active = activeKey === sortKey;
+  const Icon = active ? direction === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
+  return <TableHead className={className} aria-sort={active ? direction === "asc" ? "ascending" : "descending" : "none"}><button className={`sort-head ${active ? "active" : ""}`} onClick={() => onSort(sortKey)} title={`เรียงตาม${label}`}><span>{label}</span><Icon/></button></TableHead>;
+}
 
 export default function Home() {
   const [marketKey, setMarketKey] = useState<MarketKey>("thai");
@@ -87,6 +94,7 @@ export default function Home() {
   const [range, setRange] = useState("1M");
   const [timeframe, setTimeframe] = useState("multi");
   const [theme, setTheme] = useState<"core" | "dividend">("core");
+  const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({ key: "score", direction: "desc" });
   const [scanning, setScanning] = useState(false);
   const [lastScan, setLastScan] = useState("--:--");
   const [source, setSource] = useState("กำลังเชื่อมข้อมูลจริง...");
@@ -112,6 +120,21 @@ export default function Home() {
     const matchesState = stateFilter === "ALL" || effectiveState(stock) === stateFilter;
     const matchesView = viewMode !== "watchlist" || watchlist.includes(watchKey(stock)) || (marketKey === "thai" && watchlist.includes(stock.symbol));
     return matchesSignal && matchesSearch && matchesScore && matchesState && matchesView;
+  });
+  const signalRank: Record<Stock["signal"], number> = { Breakout: 4, Pullback: 3, Momentum: 2, Watch: 1 };
+  filtered.sort((a, b) => {
+    const value = (stock: Stock): number | string => {
+      if (sort.key === "symbol") return stock.symbol;
+      if (sort.key === "price") return stock.price;
+      if (sort.key === "signal") return signalRank[stock.signal];
+      if (sort.key === "trend") return stock.trendScore ?? stock.score;
+      if (sort.key === "rsi") return stock.rsi;
+      if (sort.key === "metric") return theme === "dividend" ? stock.dividendYield ?? 0 : stock.volume;
+      return stock.score;
+    };
+    const aValue = value(a), bValue = value(b);
+    const comparison = typeof aValue === "string" && typeof bValue === "string" ? aValue.localeCompare(bValue, "th") : Number(aValue) - Number(bValue);
+    return (sort.direction === "asc" ? comparison : -comparison) || a.symbol.localeCompare(b.symbol);
   });
   const selected = useMemo(() => displayStocks.find((stock) => stock.symbol === selectedSymbol) ?? displayStocks[0] ?? null, [displayStocks, selectedSymbol]);
   const gainers = stocks.filter((stock) => stock.change >= 0).length;
@@ -155,6 +178,11 @@ export default function Home() {
 
   function changeMarket(next: MarketKey) {
     setMarketKey(next); if (next === "crypto") setTheme("core"); setSignal("ทั้งหมด"); setQuery(""); setMarket(null); setSelectedSymbol("");
+  }
+  function changeSort(key: SortKey) {
+    setSort((current) => current.key === key
+      ? { key, direction: current.direction === "desc" ? "asc" : "desc" }
+      : { key, direction: key === "symbol" ? "asc" : "desc" });
   }
   function toggleWatch(stock: Stock) {
     const key = watchKey(stock);
@@ -221,7 +249,7 @@ export default function Home() {
               <section className="scanner-panel">
                 <div className="panel-head"><div><p className="section-kicker">{viewMode === "watchlist" ? <Star/> : <Radar/>} {viewMode === "watchlist" ? "MY WATCHLIST" : theme === "dividend" ? "DIVIDEND + TECHNICAL SCANNER" : "MULTI-ASSET SCANNER"}</p><h2>{viewMode === "watchlist" ? "รายการที่ติดตาม" : `โอกาสใน ${marketMeta.label}`} <span>{filtered.length}</span></h2></div><div className="filters"><div className="universe-chip"><Globe2/><span>{marketMeta.label}<small>{scanned || "—"} สินทรัพย์ · {marketMeta.currency}</small></span></div><Select value={timeframe} onValueChange={setTimeframe}><SelectTrigger aria-label="เลือกกรอบเวลา"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="multi">MTF · D1 / H4 / H1</SelectItem><SelectItem value="day">กรอบวัน (1D)</SelectItem><SelectItem value="hour">60 นาที</SelectItem><SelectItem value="15m">15 นาที</SelectItem></SelectContent></Select><Sheet><SheetTrigger asChild><Button variant="outline" className={minScore > 0 || stateFilter !== "ALL" ? "filter-active" : ""}><ListFilter/> ตัวกรอง{(minScore > 0 || stateFilter !== "ALL") && <span className="filter-dot"/>}</Button></SheetTrigger><SheetContent className="filter-sheet"><SheetHeader><SheetTitle>ตัวกรองสัญญาณ</SheetTitle><SheetDescription>เลือกเฉพาะสินทรัพย์ที่ตรงเกณฑ์การตัดสินใจ</SheetDescription></SheetHeader><div className="filter-body"><label>คะแนนขั้นต่ำ</label><div className="filter-options">{[0, 60, 70, 80].map((value) => <Button key={value} variant={minScore === value ? "default" : "outline"} onClick={() => setMinScore(value)}>{value === 0 ? "ทั้งหมด" : `${value}+`}</Button>)}</div><label>สถานะการตัดสินใจ</label><div className="filter-options vertical">{[["ALL", "ทุกสถานะ"], ["TRADE", "TRADE · เข้าเกณฑ์"], ["WAIT", "WAIT · รอยืนยัน"], ["NO_TRADE", "NO TRADE · งดเทรด"]].map(([value, label]) => <Button key={value} variant={stateFilter === value ? "default" : "outline"} onClick={() => setStateFilter(value)}>{label}</Button>)}</div><div className="filter-summary">พบตามเงื่อนไข <b>{filtered.length}</b> ตัว</div><Button variant="outline" onClick={() => { setMinScore(0); setStateFilter("ALL"); }}>ล้างตัวกรอง</Button></div></SheetContent></Sheet></div></div>
                 <div className="signal-tabs" role="tablist" aria-label="ประเภทสัญญาณ">{["ทั้งหมด", "Breakout", "Pullback", "Momentum"].map((item) => <button key={item} role="tab" aria-selected={signal === item} className={signal === item ? "selected" : ""} onClick={() => setSignal(item)}>{item}{item !== "ทั้งหมด" && <span>{displayStocks.filter((stock) => stock.signal === item).length}</span>}</button>)}</div>
-                <div className="table-wrap"><Table><TableHeader><TableRow><TableHead>อันดับ / สินทรัพย์</TableHead><TableHead className="text-right">ราคาล่าสุด</TableHead><TableHead>สัญญาณ</TableHead><TableHead>แนวโน้ม</TableHead><TableHead className="text-center">RSI</TableHead><TableHead className="text-center">{theme === "dividend" ? "Yield TTM" : "Volume"}</TableHead><TableHead className="text-center">คะแนน</TableHead><TableHead/></TableRow></TableHeader><TableBody>
+                <div className="table-wrap"><Table><TableHeader><TableRow><SortableHead label="อันดับ / สินทรัพย์" sortKey="symbol" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="ราคาล่าสุด" sortKey="price" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-right"/><SortableHead label="สัญญาณ" sortKey="signal" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="แนวโน้ม" sortKey="trend" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="RSI" sortKey="rsi" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><SortableHead label={theme === "dividend" ? "Yield TTM" : "Volume"} sortKey="metric" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><SortableHead label="คะแนน" sortKey="score" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><TableHead/></TableRow></TableHeader><TableBody>
                   {scanning && !displayStocks.length && <TableRow><TableCell colSpan={8}><div className="scan-loading"><RefreshCw className="spin"/><b>กำลังสแกน {marketOptions.find((option) => option.key === marketKey)?.sub}</b><span>ประมวลผล D1 / H4 / H1 และโครงสร้างราคา</span></div></TableCell></TableRow>}
                   {filtered.map((stock, index) => <TableRow key={stock.symbol} data-state={selected?.symbol === stock.symbol ? "selected" : undefined} onClick={() => setSelectedSymbol(stock.symbol)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && setSelectedSymbol(stock.symbol)}><TableCell><div className="stock-name"><span className="rank">{String(index + 1).padStart(2, "0")}</span><div className="ticker-logo">{stock.symbol.slice(0, 2)}</div><div><b>{stock.symbol}</b><small>{stock.sector}</small></div></div></TableCell><TableCell className="text-right"><b>{fmtPrice(stock.price)}</b><small className={stock.change >= 0 ? "positive block" : "negative block"}>{stock.change >= 0 ? "+" : ""}{stock.change.toFixed(2)}% · {stock.currency ?? marketMeta.currency}</small></TableCell><TableCell><span className={`tag ${stock.signal.toLowerCase()}`}>{stock.signal}</span></TableCell><TableCell>{stock.mtf ? <div className="mtf-compact"><BiasBadge label="D1" {...stock.mtf.d1} compact/><BiasBadge label="H4" {...stock.mtf.h4} compact/><BiasBadge label="H1" {...stock.mtf.h1} compact/></div> : <span className="trend-cell">{stock.change >= 0 ? <TrendingUp/> : <TrendingDown/>}{stock.trend}</span>}</TableCell><TableCell className="text-center"><b>{stock.rsi}</b><span className="rsi-bar"><i style={{ width: `${stock.rsi}%` }}/></span></TableCell><TableCell className="text-center">{theme === "dividend" ? <span className="yield-value"><b>{(stock.dividendYield ?? 0).toFixed(2)}%</b><small>{fmtPrice(stock.annualDividend ?? 0)} / ปี</small></span> : <b className={stock.volume >= 1.5 ? "positive" : ""}>{stock.volume.toFixed(1)}x</b>}</TableCell><TableCell className="text-center"><span className={`score ${stock.score >= 80 ? "high" : stock.score >= 65 ? "mid" : "low"}`}>{stock.score}</span></TableCell><TableCell><div className="row-actions"><Button variant="ghost" size="icon-xs" aria-label={`${isWatched(stock) ? "นำออกจาก" : "เพิ่มใน"}รายการติดตาม`} onClick={(event) => { event.stopPropagation(); toggleWatch(stock); }}><Star className={isWatched(stock) ? "starred" : ""}/></Button><ChevronRight className="row-arrow"/></div></TableCell></TableRow>)}
                   {!scanning && filtered.length === 0 && <TableRow><TableCell colSpan={8}><div className="empty-state"><Star/><b>{viewMode === "watchlist" ? "ยังไม่มีสินทรัพย์ในตลาดนี้ที่ติดตาม" : "ไม่พบสินทรัพย์ตามเงื่อนไข"}</b><p>{viewMode === "watchlist" ? "กดดาวข้างชื่อสินทรัพย์เพื่อเก็บไว้ดูภายหลัง" : "ลองลดคะแนนขั้นต่ำหรือล้างคำค้นหา"}</p></div></TableCell></TableRow>}
