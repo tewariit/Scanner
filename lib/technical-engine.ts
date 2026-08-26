@@ -174,7 +174,7 @@ export function analyze(symbol: string, name: string, sector: string, candles: C
     target: current.close + currentAtr * 2, stop: current.close - currentAtr * 1.2, atr: currentAtr,
     reasons: [current.close > currentEma20 ? "ราคาเหนือ EMA20" : "ราคาต่ำกว่า EMA20", currentEma20 > currentEma50 ? "EMA20 เหนือ EMA50" : "EMA20 ยังต่ำกว่า EMA50", volumeRatio >= 1.5 ? `Volume ยืนยัน ${volumeRatio.toFixed(1)}x` : `Volume ${volumeRatio.toFixed(1)}x ยังไม่เด่น`],
     timestamp: current.time,
-    candles: candles.slice(-70).map(({ time, open, high, low, close, volume }) => ({ time, open, high, low, close, volume })),
+    candles: candles.slice(-360).map(({ time, open, high, low, close, volume }) => ({ time, open, high, low, close, volume })),
   };
 }
 

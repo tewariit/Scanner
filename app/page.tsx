@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity, BarChart3, CandlestickChart, ChevronRight, Clock3, Gauge,
   LayoutDashboard, ListFilter, Radar, RefreshCw, Search, Settings,
@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { BacktestLab } from "@/components/backtest-lab";
+import { TradingChart } from "@/components/trading-chart";
 
 type Stock = {
   symbol: string; name: string; sector: string; price: number; change: number;
@@ -52,56 +53,6 @@ const menu = [
 
 function fmtPrice(value: number) {
   return value.toLocaleString("th-TH", { minimumFractionDigits: value < 100 ? 2 : value % 1 ? 2 : 0, maximumFractionDigits: 2 });
-}
-
-function makeSeries(stock: Stock, range: string) {
-  const count = range === "1D" ? 22 : range === "1W" ? 30 : range === "1M" ? 40 : 48;
-  const scale = stock.price * 0.006;
-  const points = Array.from({ length: count }, (_, i) => {
-    const seed = stock.seed ?? 1;
-    const wave = Math.sin((i + seed) * 0.62) * scale + Math.cos((i + seed) * 0.21) * scale * 0.55;
-    const drift = (i - count) * scale * (stock.score > 70 ? 0.13 : 0.035);
-    const close = stock.price + wave + drift;
-    const open = close - Math.sin((i + seed) * 1.17) * scale * 0.65;
-    return { open, close, high: Math.max(open, close) + scale * (0.35 + ((i * 7) % 5) / 8), low: Math.min(open, close) - scale * (0.35 + ((i * 3) % 5) / 8) };
-  });
-  points[points.length - 1].close = stock.price;
-  return points;
-}
-
-function StockChart({ stock, range }: { stock: Stock; range: string }) {
-  const series = useMemo(() => {
-    if (!stock.candles?.length) return makeSeries(stock, range);
-    const count = range === "1D" ? 22 : range === "1W" ? 30 : range === "1M" ? 45 : 70;
-    return stock.candles.slice(-count);
-  }, [stock, range]);
-  const all = series.flatMap((p) => [p.high, p.low]);
-  const min = Math.min(...all) * 0.997;
-  const max = Math.max(...all) * 1.003;
-  const y = (price: number) => 222 - ((price - min) / (max - min)) * 190;
-  const step = 650 / series.length;
-  const averageLine = (period: number) => series.map((_, i) => {
-    const from = Math.max(0, i - period);
-    const avg = series.slice(from, i + 1).reduce((sum, p) => sum + p.close, 0) / (i - from + 1);
-    return `${18 + i * step + step / 2},${y(avg)}`;
-  }).join(" ");
-
-  return (
-    <svg viewBox="0 0 730 250" className="price-chart" role="img" aria-label={`กราฟแท่งเทียนของ ${stock.symbol}`}>
-      {[32, 79, 127, 174, 222].map((gy) => <line key={gy} x1="18" x2="668" y1={gy} y2={gy} stroke="#28313a" strokeDasharray="3 5" />)}
-      <rect x="18" y={y(stock.target)} width="650" height="2" fill="#9bf526" opacity=".3" />
-      {series.map((p, i) => {
-        const up = p.close >= p.open;
-        const x = 18 + i * step + step / 2;
-        const color = up ? "#37e6a1" : "#ff667d";
-        return <g key={i}><line x1={x} x2={x} y1={y(p.high)} y2={y(p.low)} stroke={color}/><rect x={x - Math.max(2, step * .25)} y={Math.min(y(p.open), y(p.close))} width={Math.max(4, step * .5)} height={Math.max(2, Math.abs(y(p.open) - y(p.close)))} rx="1" fill={color}/></g>;
-      })}
-      <polyline points={averageLine(11)} fill="none" stroke="#818cf8" strokeWidth="1.5" opacity=".9" />
-      <polyline points={averageLine(5)} fill="none" stroke="#f8c35d" strokeWidth="1.5" opacity=".95" />
-      {[max, (max + min) / 2, min].map((price, i) => <text key={i} x="680" y={[38, 132, 224][i]} fill="#77828f" fontSize="11">{fmtPrice(price)}</text>)}
-      <g transform={`translate(618 ${Math.max(18, y(stock.price) - 10)})`}><rect width="58" height="20" rx="5" fill="#9bf526"/><text x="29" y="14" textAnchor="middle" fill="#101610" fontSize="11" fontWeight="700">{fmtPrice(stock.price)}</text></g>
-    </svg>
-  );
 }
 
 function ScoreRing({ score }: { score: number }) {
@@ -210,7 +161,7 @@ export default function Home() {
 
             <section className="detail-panel">
               <div className="detail-head"><div className="stock-title"><div className="ticker-logo large">{selected.symbol.slice(0, 2)}</div><div><h2>{selected.symbol} <span>{selected.name}</span></h2><p>{selected.sector} · หุ้นสภาพคล่องสูง</p></div></div><div className="detail-quote-actions"><Button variant="outline" size="icon-sm" aria-label="เพิ่มหุ้นที่ติดตาม" onClick={() => toggleWatch(selected.symbol)}><Star className={watchlist.includes(selected.symbol) ? "starred" : ""}/></Button><div className="quote"><strong>{fmtPrice(selected.price)}</strong><span className={selected.change >= 0 ? "positive" : "negative"}>{selected.change >= 0 ? <TrendingUp/> : <TrendingDown/>}{selected.change >= 0 ? "+" : ""}{selected.change.toFixed(2)}%</span></div></div></div>
-              <div className="detail-grid"><div className="chart-card"><div className="chart-toolbar"><div><span className="legend candle"/>ราคา <span className="legend ema20"/>EMA20 <span className="legend ema50"/>EMA50</div><div className="ranges">{["1D", "1W", "1M", "3M"].map(r => <button className={range === r ? "active" : ""} onClick={() => setRange(r)} key={r}>{r}</button>)}</div></div><StockChart stock={selected} range={range}/></div><aside className="analysis-card"><div className="analysis-title"><div><p>TECHNICAL SCORE</p><h3>โอกาสเชิงเทคนิค <span className={`state-pill ${(selected.state ?? "WAIT").toLowerCase()}`}>{selected.state ?? "WAIT"}</span></h3></div><ScoreRing score={selected.score}/></div>{selected.mtf && <div className={`mtf-strip ${selected.mtf.conflict ? "conflict" : selected.mtf.aligned ? "aligned" : ""}`}><div className="mtf-badges"><BiasBadge label="D1" {...selected.mtf.d1}/><ChevronRight/><BiasBadge label="H4" {...selected.mtf.h4}/><ChevronRight/><BiasBadge label="H1" {...selected.mtf.h1}/></div><p>{selected.mtf.summary}</p><small>{selected.mtf.note}</small></div>}{selected.structure && <div className={`structure-path ${selected.structure.stage === "ENTRY_READY" ? "ready" : ""}`}><div className="structure-head"><span>H1 MARKET STRUCTURE · {selected.structure.label}</span><b>{selected.structure.stage.replaceAll("_", " ")}</b></div><div className="structure-steps"><span className={selected.structure.choch ? "done" : ""}><i>1</i>CHoCH</span><em/><span className={selected.structure.bos ? "done" : ""}><i>2</i>BOS</span><em/><span className={selected.structure.pullback ? "done" : ""}><i>3</i>Pullback</span></div><p>{selected.structure.summary}</p>{selected.structure.breakLevel && <small>Break level {fmtPrice(selected.structure.breakLevel)} · Swing {selected.structure.lastSwingLow ? fmtPrice(selected.structure.lastSwingLow) : "—"}–{selected.structure.lastSwingHigh ? fmtPrice(selected.structure.lastSwingHigh) : "—"}</small>}</div>}<div className="thesis"><Target/><div><b>{selected.signal}: {selected.trend}</b><p>{selected.reasons?.join(" · ") ?? "กำลังประเมิน EMA, RSI และ Volume เพื่อหาจังหวะที่มี confluence"}</p></div></div><div className="score-breakdown"><div><span>Trend Score</span><b>{selected.trendScore ?? Math.round(selected.score * .55)}</b><i><em style={{width: `${selected.trendScore ?? selected.score}%`}}/></i></div><div><span>Entry Score</span><b>{selected.entryScore ?? Math.round(selected.score * .45)}</b><i><em style={{width: `${selected.entryScore ?? selected.score}%`}}/></i></div></div><div className="levels"><div><span>แนวต้าน / เป้าหมาย (2 ATR)</span><b className="positive">{fmtPrice(selected.target)}</b></div><div><span>แนวรับกึ่งกลาง</span><b>{fmtPrice((selected.price + selected.stop) / 2)}</b></div><div><span>จุดยกเลิกแผน (1.2 ATR)</span><b className="negative">{fmtPrice(selected.stop)}</b></div></div><div className="indicators"><span><i className={selected.trend.includes("ขึ้น") ? "ok" : "wait"}/>Trend <b>{selected.trend}</b></span><span><i className="ok"/>RSI <b>{selected.rsi}</b></span><span><i className={selected.volume >= 1.5 ? "ok" : "wait"}/>Volume <b>{selected.volume >= 1.5 ? "ยืนยัน" : "รอยืนยัน"}</b></span></div><p className="disclaimer">ข้อมูลหน่วงประมาณ 15 นาที เพื่อการศึกษา ไม่ใช่คำแนะนำซื้อขาย · ตรวจราคาจริงกับโบรกเกอร์ก่อนส่งคำสั่ง</p></aside></div>
+              <div className="detail-grid"><div className="chart-card"><div className="chart-toolbar"><div><b>INTERACTIVE CHART</b><span>TradingView-style</span></div><div className="ranges">{["1D", "1W", "1M", "3M"].map(r => <button className={range === r ? "active" : ""} onClick={() => setRange(r)} key={r}>{r}</button>)}</div></div><TradingChart stock={selected} range={range} timeframe={timeframe}/></div><aside className="analysis-card"><div className="analysis-title"><div><p>TECHNICAL SCORE</p><h3>โอกาสเชิงเทคนิค <span className={`state-pill ${(selected.state ?? "WAIT").toLowerCase()}`}>{selected.state ?? "WAIT"}</span></h3></div><ScoreRing score={selected.score}/></div>{selected.mtf && <div className={`mtf-strip ${selected.mtf.conflict ? "conflict" : selected.mtf.aligned ? "aligned" : ""}`}><div className="mtf-badges"><BiasBadge label="D1" {...selected.mtf.d1}/><ChevronRight/><BiasBadge label="H4" {...selected.mtf.h4}/><ChevronRight/><BiasBadge label="H1" {...selected.mtf.h1}/></div><p>{selected.mtf.summary}</p><small>{selected.mtf.note}</small></div>}{selected.structure && <div className={`structure-path ${selected.structure.stage === "ENTRY_READY" ? "ready" : ""}`}><div className="structure-head"><span>H1 MARKET STRUCTURE · {selected.structure.label}</span><b>{selected.structure.stage.replaceAll("_", " ")}</b></div><div className="structure-steps"><span className={selected.structure.choch ? "done" : ""}><i>1</i>CHoCH</span><em/><span className={selected.structure.bos ? "done" : ""}><i>2</i>BOS</span><em/><span className={selected.structure.pullback ? "done" : ""}><i>3</i>Pullback</span></div><p>{selected.structure.summary}</p>{selected.structure.breakLevel && <small>Break level {fmtPrice(selected.structure.breakLevel)} · Swing {selected.structure.lastSwingLow ? fmtPrice(selected.structure.lastSwingLow) : "—"}–{selected.structure.lastSwingHigh ? fmtPrice(selected.structure.lastSwingHigh) : "—"}</small>}</div>}<div className="thesis"><Target/><div><b>{selected.signal}: {selected.trend}</b><p>{selected.reasons?.join(" · ") ?? "กำลังประเมิน EMA, RSI และ Volume เพื่อหาจังหวะที่มี confluence"}</p></div></div><div className="score-breakdown"><div><span>Trend Score</span><b>{selected.trendScore ?? Math.round(selected.score * .55)}</b><i><em style={{width: `${selected.trendScore ?? selected.score}%`}}/></i></div><div><span>Entry Score</span><b>{selected.entryScore ?? Math.round(selected.score * .45)}</b><i><em style={{width: `${selected.entryScore ?? selected.score}%`}}/></i></div></div><div className="levels"><div><span>แนวต้าน / เป้าหมาย (2 ATR)</span><b className="positive">{fmtPrice(selected.target)}</b></div><div><span>แนวรับกึ่งกลาง</span><b>{fmtPrice((selected.price + selected.stop) / 2)}</b></div><div><span>จุดยกเลิกแผน (1.2 ATR)</span><b className="negative">{fmtPrice(selected.stop)}</b></div></div><div className="indicators"><span><i className={selected.trend.includes("ขึ้น") ? "ok" : "wait"}/>Trend <b>{selected.trend}</b></span><span><i className="ok"/>RSI <b>{selected.rsi}</b></span><span><i className={selected.volume >= 1.5 ? "ok" : "wait"}/>Volume <b>{selected.volume >= 1.5 ? "ยืนยัน" : "รอยืนยัน"}</b></span></div><p className="disclaimer">ข้อมูลหน่วงประมาณ 15 นาที เพื่อการศึกษา ไม่ใช่คำแนะนำซื้อขาย · ตรวจราคาจริงกับโบรกเกอร์ก่อนส่งคำสั่ง</p></aside></div>
             </section>
             </>}
           </div>
