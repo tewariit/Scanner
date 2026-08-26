@@ -1,12 +1,16 @@
 import {
   analyze,
   detectStructure,
+  dividendUniverses,
   fetchChart,
+  fetchChartData,
   marketUniverses,
   resampleFourHour,
   structureEntryScore,
   type MarketUniverseKey,
 } from "@/lib/technical-engine";
+
+type UniverseTheme = "core" | "dividend";
 
 const intervalConfig = {
   day: { interval: "1d", range: "6mo", minBars: 55 },
@@ -26,6 +30,19 @@ function requestedMarket(request: Request): MarketUniverseKey {
   return value === "global" || value === "etf" || value === "crypto" ? value : "thai";
 }
 
+function requestedTheme(url: URL, marketKey: MarketUniverseKey): UniverseTheme {
+  return url.searchParams.get("theme") === "dividend" && marketKey !== "crypto" ? "dividend" : "core";
+}
+
+function instrumentsFor(marketKey: MarketUniverseKey, theme: UniverseTheme) {
+  return theme === "dividend" && marketKey !== "crypto" ? dividendUniverses[marketKey] : marketUniverses[marketKey];
+}
+
+async function dividendData(ticker: string, enabled: boolean) {
+  if (!enabled) return { annualDividend: 0 };
+  return fetchChartData(ticker, "1d", "1y", 300);
+}
+
 async function benchmarkQuote(ticker: string, interval: string, range: string) {
   try {
     const candles = await fetchChart(ticker, interval, range);
@@ -39,27 +56,36 @@ async function benchmarkQuote(ticker: string, interval: string, range: string) {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const marketKey = requestedMarket(request);
+  const theme = requestedTheme(url, marketKey);
   const requested = url.searchParams.get("timeframe");
-  if (requested === "multi") return multiTimeframeScan(marketKey);
+  if (requested === "multi") return multiTimeframeScan(marketKey, theme);
   const timeframe = requested as keyof typeof intervalConfig | null;
   const key = timeframe && timeframe in intervalConfig ? timeframe : "day";
   const config = intervalConfig[key];
-  const instruments = marketUniverses[marketKey];
+  const instruments = instrumentsFor(marketKey, theme);
   const meta = marketMeta[marketKey];
 
   try {
     const settled = await Promise.allSettled(instruments.map(async ([symbol, ticker, name, sector]) => {
-      const candles = await fetchChart(ticker, config.interval, config.range);
+      const [candles, dividend] = await Promise.all([
+        fetchChart(ticker, config.interval, config.range),
+        dividendData(ticker, theme === "dividend"),
+      ]);
       if (candles.length < config.minBars) throw new Error("insufficient history");
-      return { ...analyze(symbol, name, sector, candles), marketKey, currency: meta.currency };
+      const result = analyze(symbol, name, sector, candles);
+      return {
+        ...result, marketKey, currency: meta.currency,
+        annualDividend: dividend.annualDividend,
+        dividendYield: dividend.annualDividend > 0 ? dividend.annualDividend / result.price * 100 : 0,
+      };
     }));
     const stocks = settled.flatMap((item) => item.status === "fulfilled" ? [item.value] : []).sort((a, b) => b.score - a.score);
     if (stocks.length < Math.min(5, instruments.length)) throw new Error("ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอ");
     const market = await benchmarkQuote(meta.benchmark, config.interval, config.range);
     return Response.json({
-      stocks, market, marketMeta: meta, scanned: instruments.length, succeeded: stocks.length,
-      source: marketKey === "crypto" ? "Yahoo Finance · ตลาดคริปโต 24/7" : "Yahoo Finance · delayed quote",
-      timeframe: key, generatedAt: Date.now(),
+      stocks, market, marketMeta: { ...meta, label: theme === "dividend" ? `${meta.label}ปันผล` : meta.label }, scanned: instruments.length, succeeded: stocks.length,
+      source: theme === "dividend" ? "Yahoo Finance · ราคาและเงินปันผลย้อนหลัง 12 เดือน" : marketKey === "crypto" ? "Yahoo Finance · ตลาดคริปโต 24/7" : "Yahoo Finance · delayed quote",
+      timeframe: key, theme, generatedAt: Date.now(),
     }, { headers: { "Cache-Control": "public, max-age=30, s-maxage=60" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถโหลดข้อมูลได้";
@@ -67,14 +93,15 @@ export async function GET(request: Request) {
   }
 }
 
-async function multiTimeframeScan(marketKey: MarketUniverseKey) {
-  const instruments = marketUniverses[marketKey];
+async function multiTimeframeScan(marketKey: MarketUniverseKey, theme: UniverseTheme) {
+  const instruments = instrumentsFor(marketKey, theme);
   const meta = marketMeta[marketKey];
   try {
     const settled = await Promise.allSettled(instruments.map(async ([symbol, ticker, name, sector]) => {
-      const [dailyCandles, hourlyCandles] = await Promise.all([
+      const [dailyCandles, hourlyCandles, dividend] = await Promise.all([
         fetchChart(ticker, "1d", "6mo", 90),
         fetchChart(ticker, "60m", "3mo", 90),
+        dividendData(ticker, theme === "dividend"),
       ]);
       const fourHourCandles = resampleFourHour(hourlyCandles, meta.timeZone);
       if (dailyCandles.length < 55 || hourlyCandles.length < 55 || fourHourCandles.length < 55) throw new Error("insufficient MTF history");
@@ -98,6 +125,8 @@ async function multiTimeframeScan(marketKey: MarketUniverseKey) {
 
       return {
         ...h1, marketKey, currency: meta.currency, score, trendScore, entryScore, state,
+        annualDividend: dividend.annualDividend,
+        dividendYield: dividend.annualDividend > 0 ? dividend.annualDividend / h1.price * 100 : 0,
         signal: structure.stage === "ENTRY_READY" ? "Pullback" : structure.stage === "BOS_CONFIRMED" ? "Breakout" : h1.signal,
         trend: aligned ? "MTF ขาขึ้น" : conflict ? "กรอบเวลาขัดกัน" : state === "NO_TRADE" ? "MTF ขาลง" : "รอ MTF ยืนยัน",
         reasons: [summary, structureSummary, `D1 ${d1.bias} · H4 ${h4.bias} · H1 ${h1.bias}`, ...h1.reasons],
@@ -112,9 +141,9 @@ async function multiTimeframeScan(marketKey: MarketUniverseKey) {
     if (stocks.length < Math.min(5, instruments.length)) throw new Error("ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอสำหรับ MTF");
     const market = await benchmarkQuote(meta.benchmark, "1d", "6mo");
     return Response.json({
-      stocks, market, marketMeta: meta, scanned: instruments.length, succeeded: stocks.length,
-      source: marketKey === "crypto" ? "Yahoo Finance · Crypto MTF 24/7" : "Yahoo Finance · MTF delayed quote",
-      timeframe: "multi", generatedAt: Date.now(),
+      stocks, market, marketMeta: { ...meta, label: theme === "dividend" ? `${meta.label}ปันผล` : meta.label }, scanned: instruments.length, succeeded: stocks.length,
+      source: theme === "dividend" ? "Yahoo Finance · MTF และเงินปันผลย้อนหลัง 12 เดือน" : marketKey === "crypto" ? "Yahoo Finance · Crypto MTF 24/7" : "Yahoo Finance · MTF delayed quote",
+      timeframe: "multi", theme, generatedAt: Date.now(),
     }, { headers: { "Cache-Control": "public, max-age=30, s-maxage=90" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถโหลดข้อมูล MTF ได้";

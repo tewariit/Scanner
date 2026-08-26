@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "MARKETPULSE — Global Technical Scanner",
-  description: "แดชบอร์ดสแกนหุ้นไทย หุ้นโลก ETF และคริปโต ด้วยกฎ Multi-Timeframe พร้อม Global Pulse",
+  description: "แดชบอร์ดสแกนหุ้นไทย หุ้นโลก ETF คริปโต และหุ้นปันผล ด้วยกฎ Multi-Timeframe พร้อม Global Pulse",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 

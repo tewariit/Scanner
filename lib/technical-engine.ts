@@ -16,6 +16,7 @@ export const universe = [
 ] as const;
 
 export type MarketUniverseKey = "thai" | "global" | "etf" | "crypto";
+export type DividendUniverseKey = Exclude<MarketUniverseKey, "crypto">;
 export type MarketInstrument = readonly [symbol: string, ticker: string, name: string, sector: string];
 
 export const globalStocks: readonly MarketInstrument[] = [
@@ -70,6 +71,57 @@ export const cryptoAssets: readonly MarketInstrument[] = [
   ["LTC", "LTC-USD", "Litecoin", "Payments"],
   ["BCH", "BCH-USD", "Bitcoin Cash", "Payments"],
 ] as const;
+
+export const dividendUniverses = {
+  thai: [
+    ["ADVANC", "ADVANC.BK", "แอดวานซ์ อินโฟร์ เซอร์วิส", "สื่อสาร"],
+    ["TISCO", "TISCO.BK", "ทิสโก้ไฟแนนเชียลกรุ๊ป", "ธนาคาร"],
+    ["KKP", "KKP.BK", "ธนาคารเกียรตินาคินภัทร", "ธนาคาร"],
+    ["SCB", "SCB.BK", "เอสซีบี เอกซ์", "ธนาคาร"],
+    ["KTB", "KTB.BK", "ธนาคารกรุงไทย", "ธนาคาร"],
+    ["KBANK", "KBANK.BK", "ธนาคารกสิกรไทย", "ธนาคาร"],
+    ["PTT", "PTT.BK", "ปตท.", "พลังงาน"],
+    ["PTTEP", "PTTEP.BK", "ปตท. สำรวจและผลิตปิโตรเลียม", "พลังงาน"],
+    ["RATCH", "RATCH.BK", "ราช กรุ๊ป", "โรงไฟฟ้า"],
+    ["EGCO", "EGCO.BK", "ผลิตไฟฟ้า", "โรงไฟฟ้า"],
+    ["AP", "AP.BK", "เอพี (ไทยแลนด์)", "อสังหาริมทรัพย์"],
+    ["SPALI", "SPALI.BK", "ศุภาลัย", "อสังหาริมทรัพย์"],
+    ["LH", "LH.BK", "แลนด์ แอนด์ เฮ้าส์", "อสังหาริมทรัพย์"],
+    ["WHAUP", "WHAUP.BK", "ดับบลิวเอชเอ ยูทิลิตี้ส์ แอนด์ พาวเวอร์", "สาธารณูปโภค"],
+  ],
+  global: [
+    ["KO", "KO", "Coca-Cola", "Consumer Staples"],
+    ["PEP", "PEP", "PepsiCo", "Consumer Staples"],
+    ["PG", "PG", "Procter & Gamble", "Consumer Staples"],
+    ["JNJ", "JNJ", "Johnson & Johnson", "Healthcare"],
+    ["ABBV", "ABBV", "AbbVie", "Healthcare"],
+    ["MCD", "MCD", "McDonald's", "Consumer Discretionary"],
+    ["XOM", "XOM", "Exxon Mobil", "Energy"],
+    ["CVX", "CVX", "Chevron", "Energy"],
+    ["JPM", "JPM", "JPMorgan Chase", "Banking"],
+    ["HD", "HD", "Home Depot", "Retail"],
+    ["LOW", "LOW", "Lowe's", "Retail"],
+    ["CAT", "CAT", "Caterpillar", "Industrials"],
+    ["IBM", "IBM", "IBM", "Technology"],
+    ["TXN", "TXN", "Texas Instruments", "Semiconductors"],
+    ["ADP", "ADP", "Automatic Data Processing", "Business Services"],
+    ["NEE", "NEE", "NextEra Energy", "Utilities"],
+  ],
+  etf: [
+    ["SCHD", "SCHD", "Schwab US Dividend Equity ETF", "Dividend Quality"],
+    ["VYM", "VYM", "Vanguard High Dividend Yield ETF", "High Dividend"],
+    ["DGRO", "DGRO", "iShares Core Dividend Growth", "Dividend Growth"],
+    ["HDV", "HDV", "iShares Core High Dividend", "High Dividend"],
+    ["SPYD", "SPYD", "SPDR Portfolio S&P 500 High Dividend", "High Dividend"],
+    ["VIG", "VIG", "Vanguard Dividend Appreciation", "Dividend Growth"],
+    ["SDY", "SDY", "SPDR S&P Dividend ETF", "Dividend Aristocrats"],
+    ["NOBL", "NOBL", "ProShares S&P 500 Dividend Aristocrats", "Dividend Aristocrats"],
+    ["DGRW", "DGRW", "WisdomTree US Quality Dividend Growth", "Dividend Quality"],
+    ["JEPI", "JEPI", "JPMorgan Equity Premium Income", "Income"],
+    ["JEPQ", "JEPQ", "JPMorgan Nasdaq Equity Premium Income", "Income"],
+    ["DIV", "DIV", "Global X SuperDividend US ETF", "High Dividend"],
+  ],
+} satisfies Record<DividendUniverseKey, readonly MarketInstrument[]>;
 
 export const marketUniverses = {
   thai: universe.map(([symbol, name, sector]) => [symbol, `${symbol}.BK`, name, sector] as const),
@@ -262,20 +314,28 @@ export function resampleFourHour(candles: Candle[], timeZone = "Asia/Bangkok") {
   }).sort((a, b) => a.time - b.time);
 }
 
-export async function fetchChart(ticker: string, interval: string, range: string, cacheTtl = 60) {
+export async function fetchChartData(ticker: string, interval: string, range: string, cacheTtl = 60) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}&events=div%2Csplits`;
     const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }, cf: { cacheTtl } } as RequestInit & { cf: { cacheTtl: number } });
     if (!response.ok) throw new Error(`upstream ${response.status}`);
-    const json = await response.json() as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ open?: Array<number | null>; high?: Array<number | null>; low?: Array<number | null>; close?: Array<number | null>; volume?: Array<number | null> }> } }> } };
+    const json = await response.json() as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<{ open?: Array<number | null>; high?: Array<number | null>; low?: Array<number | null>; close?: Array<number | null>; volume?: Array<number | null> }> }; events?: { dividends?: Record<string, { amount?: number; date?: number }> } }> } };
     const result = json.chart?.result?.[0];
     const quote = result?.indicators?.quote?.[0];
     if (!result?.timestamp || !quote) throw new Error("missing chart data");
-    return result.timestamp.flatMap((time, index) => {
+    const candles = result.timestamp.flatMap((time, index) => {
       const open = quote.open?.[index], high = quote.high?.[index], low = quote.low?.[index], close = quote.close?.[index], volume = quote.volume?.[index];
       return open == null || high == null || low == null || close == null ? [] : [{ time, open, high, low, close, volume: volume ?? 0 }];
     });
+    const cutoff = Date.now() / 1000 - 366 * 24 * 60 * 60;
+    const annualDividend = Object.values(result.events?.dividends ?? {}).reduce((sum, dividend) =>
+      (dividend.date ?? 0) >= cutoff ? sum + (dividend.amount ?? 0) : sum, 0);
+    return { candles, annualDividend };
   } finally { clearTimeout(timer); }
+}
+
+export async function fetchChart(ticker: string, interval: string, range: string, cacheTtl = 60) {
+  return (await fetchChartData(ticker, interval, range, cacheTtl)).candles;
 }
