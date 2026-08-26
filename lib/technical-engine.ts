@@ -1,6 +1,7 @@
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 export type Signal = "Breakout" | "Pullback" | "Momentum" | "Watch";
 export type Bias = "BULLISH" | "BEARISH" | "NEUTRAL";
+export type StructureStage = "ENTRY_READY" | "BOS_CONFIRMED" | "CHOCH_DETECTED" | "WAIT_STRUCTURE" | "BEARISH_STRUCTURE";
 
 export const universe = [
   ["ADVANC", "แอดวานซ์ อินโฟร์ เซอร์วิส", "เทคโนโลยี"], ["AOT", "ท่าอากาศยานไทย", "ขนส่ง"],
@@ -35,6 +36,84 @@ export function atr(candles: Candle[], period = 14) {
     Math.abs(candle.low - tail[index].close),
   ));
   return trueRanges.reduce((sum, value) => sum + value, 0) / Math.max(1, trueRanges.length);
+}
+
+export function detectStructure(candles: Candle[]) {
+  const window = candles.slice(-120);
+  const swingsHigh: Array<{ index: number; price: number; time: number }> = [];
+  const swingsLow: Array<{ index: number; price: number; time: number }> = [];
+  const events: Array<{ index: number; kind: "CHOCH" | "BOS"; direction: "BULLISH" | "BEARISH"; level: number }> = [];
+  let bias: Bias = "NEUTRAL";
+  let brokenHigh = -1;
+  let brokenLow = -1;
+
+  for (let index = 4; index < window.length; index++) {
+    const pivotIndex = index - 2;
+    const pivot = window[pivotIndex];
+    const neighborhood = window.slice(pivotIndex - 2, pivotIndex + 3);
+    const isHigh = neighborhood.every((candle, offset) => offset === 2 || pivot.high > candle.high);
+    const isLow = neighborhood.every((candle, offset) => offset === 2 || pivot.low < candle.low);
+    if (isHigh) swingsHigh.push({ index: pivotIndex, price: pivot.high, time: pivot.time });
+    if (isLow) swingsLow.push({ index: pivotIndex, price: pivot.low, time: pivot.time });
+
+    const highPair = swingsHigh.slice(-2);
+    const lowPair = swingsLow.slice(-2);
+    if (highPair.length === 2 && lowPair.length === 2) {
+      if (highPair[1].price > highPair[0].price && lowPair[1].price > lowPair[0].price) bias = "BULLISH";
+      else if (highPair[1].price < highPair[0].price && lowPair[1].price < lowPair[0].price) bias = "BEARISH";
+    }
+
+    const lastHigh = swingsHigh.at(-1);
+    const lastLow = swingsLow.at(-1);
+    if (lastHigh && lastHigh.index !== brokenHigh && window[index].close > lastHigh.price) {
+      events.push({ index, kind: bias === "BEARISH" ? "CHOCH" : "BOS", direction: "BULLISH", level: lastHigh.price });
+      bias = "BULLISH";
+      brokenHigh = lastHigh.index;
+    }
+    if (lastLow && lastLow.index !== brokenLow && window[index].close < lastLow.price) {
+      events.push({ index, kind: bias === "BULLISH" ? "CHOCH" : "BOS", direction: "BEARISH", level: lastLow.price });
+      bias = "BEARISH";
+      brokenLow = lastLow.index;
+    }
+  }
+
+  const latestBullChoch = [...events].reverse().find((event) => event.kind === "CHOCH" && event.direction === "BULLISH");
+  const latestBearEvent = [...events].reverse().find((event) => event.direction === "BEARISH");
+  const activeChoch = latestBullChoch && (!latestBearEvent || latestBearEvent.index < latestBullChoch.index) ? latestBullChoch : undefined;
+  const activeBos = activeChoch ? events.find((event) => event.index > activeChoch.index && event.kind === "BOS" && event.direction === "BULLISH") : undefined;
+  const currentAtr = atr(window);
+  const current = window.at(-1)!;
+  let pullbackIndex = -1;
+  if (activeBos) {
+    for (let index = activeBos.index + 1; index < window.length; index++) {
+      const candle = window[index];
+      if (candle.low <= activeBos.level + currentAtr * .25 && candle.close >= activeBos.level - currentAtr * .15) pullbackIndex = index;
+    }
+  }
+  const pullback = Boolean(activeBos && pullbackIndex >= 0 && window.length - 1 - pullbackIndex <= 3 && current.close <= activeBos.level + currentAtr * .65);
+  const highPair = swingsHigh.slice(-2);
+  const lowPair = swingsLow.slice(-2);
+  const label = highPair.length === 2 && lowPair.length === 2
+    ? highPair[1].price > highPair[0].price && lowPair[1].price > lowPair[0].price ? "HH / HL"
+      : highPair[1].price < highPair[0].price && lowPair[1].price < lowPair[0].price ? "LH / LL" : "MIXED"
+    : "FORMING";
+  const stage: StructureStage = activeChoch && activeBos && pullback ? "ENTRY_READY"
+    : activeChoch && activeBos ? "BOS_CONFIRMED"
+      : activeChoch ? "CHOCH_DETECTED"
+        : bias === "BEARISH" ? "BEARISH_STRUCTURE" : "WAIT_STRUCTURE";
+
+  return {
+    direction: bias,
+    label,
+    stage,
+    choch: Boolean(activeChoch),
+    bos: Boolean(activeBos),
+    pullback,
+    breakLevel: activeBos?.level ?? activeChoch?.level ?? null,
+    lastSwingHigh: swingsHigh.at(-1)?.price ?? null,
+    lastSwingLow: swingsLow.at(-1)?.price ?? null,
+    barsSinceEvent: activeBos ? window.length - 1 - activeBos.index : activeChoch ? window.length - 1 - activeChoch.index : null,
+  };
 }
 
 export function analyze(symbol: string, name: string, sector: string, candles: Candle[]) {

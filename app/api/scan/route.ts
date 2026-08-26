@@ -1,4 +1,4 @@
-import { analyze, fetchChart, resampleFourHour, universe } from "@/lib/technical-engine";
+import { analyze, detectStructure, fetchChart, resampleFourHour, universe } from "@/lib/technical-engine";
 
 const intervalConfig = {
   day: { interval: "1d", range: "6mo", minBars: 55 },
@@ -46,14 +46,21 @@ async function multiTimeframeScan() {
       const d1 = analyze(symbol, name, sector, dailyCandles);
       const h4 = analyze(symbol, name, sector, fourHourCandles);
       const h1 = analyze(symbol, name, sector, hourlyCandles);
+      const structure = detectStructure(hourlyCandles);
       const conflict = (d1.bias === "BULLISH" && (h4.bias === "BEARISH" || h1.bias === "BEARISH")) ||
         (d1.bias === "BEARISH" && (h4.bias === "BULLISH" || h1.bias === "BULLISH"));
       const aligned = d1.bias === "BULLISH" && h4.bias === "BULLISH" && h1.bias === "BULLISH";
       const trendScore = Math.round(d1.trendScore * .45 + h4.trendScore * .35 + h1.trendScore * .2);
-      const entryScore = h1.entryScore;
-      const score = Math.round(trendScore * .65 + entryScore * .35);
-      const state = conflict ? "WAIT" : aligned && h1.signal !== "Watch" && score >= 70 ? "TRADE" : d1.bias === "BEARISH" && h4.bias === "BEARISH" ? "NO_TRADE" : "WAIT";
+      const entryScore = Math.min(100,
+        (structure.choch ? 25 : 0) + (structure.bos ? 30 : 0) + (structure.pullback ? 30 : 0) +
+        (h1.rsi >= 50 && h1.rsi <= 70 ? 10 : 0) + (h1.volume >= 1 ? 5 : 0));
+      const score = Math.round(trendScore * .6 + entryScore * .4);
+      const state = conflict ? "WAIT" : aligned && structure.stage === "ENTRY_READY" && score >= 70 ? "TRADE" : d1.bias === "BEARISH" && h4.bias === "BEARISH" ? "NO_TRADE" : "WAIT";
       const summary = conflict ? "โครงสร้างต่างกรอบขัดกัน — รอให้ H4/H1 กลับมาไปทางเดียวกับ D1" : aligned ? "D1, H4 และ H1 อยู่ฝั่งขาขึ้นเดียวกัน" : state === "NO_TRADE" ? "D1 และ H4 เป็นขาลง — ยังไม่มี Long edge" : "แนวโน้มยังไม่ครบ 3 กรอบ — รอการยืนยัน";
+      const structureSummary = structure.stage === "ENTRY_READY" ? "ครบ CHoCH → BOS → Pullback ใกล้ระดับ Break"
+        : structure.stage === "BOS_CONFIRMED" ? "ยืนยัน BOS แล้ว — รอราคาย่อกลับหา Break level"
+          : structure.stage === "CHOCH_DETECTED" ? "พบ CHoCH — รอ BOS ยืนยันโครงสร้างใหม่"
+            : structure.stage === "BEARISH_STRUCTURE" ? "H1 ยังเป็นโครงสร้าง LH / LL" : "ยังไม่พบลำดับโครงสร้างสำหรับเข้า Long";
 
       return {
         ...h1,
@@ -61,8 +68,10 @@ async function multiTimeframeScan() {
         trendScore,
         entryScore,
         state,
+        signal: structure.stage === "ENTRY_READY" ? "Pullback" : structure.stage === "BOS_CONFIRMED" ? "Breakout" : h1.signal,
         trend: aligned ? "MTF ขาขึ้น" : conflict ? "กรอบเวลาขัดกัน" : state === "NO_TRADE" ? "MTF ขาลง" : "รอ MTF ยืนยัน",
-        reasons: [summary, `D1 ${d1.bias} · H4 ${h4.bias} · H1 ${h1.bias}`, ...h1.reasons],
+        reasons: [summary, structureSummary, `D1 ${d1.bias} · H4 ${h4.bias} · H1 ${h1.bias}`, ...h1.reasons],
+        structure: { ...structure, summary: structureSummary },
         mtf: {
           d1: { bias: d1.bias, score: d1.trendScore },
           h4: { bias: h4.bias, score: h4.trendScore },
