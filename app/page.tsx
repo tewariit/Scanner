@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowDown, ArrowUp, ArrowUpDown, BarChart3, Bitcoin, CandlestickChart, ChevronRight, Clock3, Coins,
   Gauge, Globe2, LayoutDashboard, ListFilter, Radar, RefreshCw, Search, Settings,
-  Star, Target, TrendingDown, TrendingUp, Zap,
+  Square, Star, Target, TrendingDown, TrendingUp, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,6 +112,7 @@ export default function Home() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [pulse, setPulse] = useState<Pulse | null>(null);
   const [pulseError, setPulseError] = useState(false);
+  const scanRunRef = useRef(0);
 
   const displayStocks = stocks.length ? stocks : marketKey === "thai" && theme === "core" && !scanning ? demoStocks : [];
   const effectiveState = (stock: Stock): TradeState => pulse?.regime === "RISK_OFF" && stock.state === "TRADE" ? "WAIT" : stock.state ?? "WAIT";
@@ -154,7 +155,8 @@ export default function Home() {
       setPulse(null); setPulseError(true);
     }
   }
-  async function scan(nextBatch = 0, append = false, search = query) {
+  async function scan(nextBatch = 0, append = false, search = query, runToken?: number) {
+    const token = runToken ?? ++scanRunRef.current;
     setScanning(true); setError(""); if (!append) setStocks([]);
     try {
       const allThai = marketKey === "thai" && theme === "core" && thaiUniverse === "all";
@@ -162,18 +164,30 @@ export default function Home() {
       const response = await fetch(`/api/scan?${params}`, { cache: "no-store" });
       const data = await response.json() as { stocks?: Stock[]; market?: { price: number; change: number } | null; marketMeta?: MarketMeta; scanned?: number; source?: string; generatedAt?: number; universe?: { total: number; batch: number; totalBatches: number; batchSize: number }; error?: string };
       if (!response.ok || !data.stocks?.length) throw new Error(data.error || "ไม่พบข้อมูลสินทรัพย์");
+      if (token !== scanRunRef.current) return;
       setStocks((current) => append ? [...current, ...data.stocks!.filter((stock) => !current.some((old) => old.symbol === stock.symbol))] : data.stocks!);
       if (!append) setSelectedSymbol(data.stocks[0].symbol); setMarket(data.market ?? null);
       setMarketMeta(data.marketMeta ?? defaultMeta); setScanned((current) => append ? current + (data.scanned ?? data.stocks!.length) : data.scanned ?? data.stocks.length);
       if (data.universe) { setUniverseMeta(data.universe); setBatch(data.universe.batch); }
       setSource(data.source ?? "ข้อมูลตลาดจากแหล่งฟรี");
       setLastScan(new Date(data.generatedAt ?? Date.now()).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }));
+      const hasNextBatch = allThai && !search && data.universe && data.universe.batch + 1 < data.universe.totalBatches;
+      if (hasNextBatch) {
+        await new Promise((resolve) => setTimeout(resolve, 550));
+        if (token === scanRunRef.current) await scan(data.universe!.batch + 1, true, "", token);
+      }
     } catch (scanError) {
       setMarket(null); setSource("แหล่งข้อมูลฟรีขัดข้อง");
       setError(scanError instanceof Error ? scanError.message : "โหลดข้อมูลไม่สำเร็จ");
     } finally {
-      setScanning(false);
+      if (token === scanRunRef.current) setScanning(false);
     }
+  }
+
+  function stopScan() {
+    scanRunRef.current += 1;
+    setScanning(false);
+    setSource("หยุดการสแกนชั่วคราว · กดสแกนเพื่อเริ่มใหม่");
   }
 
   useEffect(() => { void loadPulse(); }, []);
@@ -218,7 +232,7 @@ export default function Home() {
         <section className="workspace">
           <header className="topbar">
             <div><p className="eyebrow"><span/> {viewMode === "backtest" ? "HISTORICAL VALIDATION" : "GLOBAL MARKET INTELLIGENCE"}</p><h1>{viewMode === "backtest" ? "ทดสอบกฎด้วยข้อมูลย้อนหลัง" : theme === "dividend" ? `สแกน${marketOptions.find((option) => option.key === marketKey)?.sub}ปันผลคุณภาพ` : marketCopy[marketKey].title}</h1><p>{viewMode === "backtest" ? "วัด Edge ของคะแนนและสัญญาณ ก่อนนำไปใช้กับเงินจริง" : theme === "dividend" ? "คัดรายชื่อปันผลเด่น แล้วใช้ D1 / H4 / H1 หาจังหวะที่ไม่ไล่ราคา" : marketCopy[marketKey].description}</p></div>
-            {viewMode !== "backtest" && <div className="header-actions"><div className={`demo-pill ${stocks.length ? "live-source" : ""}`}><span/>{source}</div>{searchOpen && <form className="search-box" onSubmit={(event) => { event.preventDefault(); void scan(0, false, query); }}><Search/><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาชื่อหรือ Symbol..." aria-label="ค้นหาสินทรัพย์"/></form>}<Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" aria-label="ค้นหา" onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) { setQuery(""); void scan(0, false, ""); } }}><Search/></Button></TooltipTrigger><TooltipContent>{searchOpen ? "ปิดการค้นหา" : "ค้นหา"}</TooltipContent></Tooltip><Button onClick={() => { void scan(0, false, query); void loadPulse(); }} disabled={scanning} className="scan-button"><RefreshCw className={scanning ? "spin" : ""}/>{scanning ? "กำลังสแกน..." : "สแกนตลาดตอนนี้"}</Button></div>}
+            {viewMode !== "backtest" && <div className="header-actions"><div className={`demo-pill ${stocks.length ? "live-source" : ""}`}><span/>{source}</div>{searchOpen && <form className="search-box" onSubmit={(event) => { event.preventDefault(); void scan(0, false, query); }}><Search/><Input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาชื่อหรือ Symbol..." aria-label="ค้นหาสินทรัพย์"/></form>}<Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" aria-label="ค้นหา" onClick={() => { setSearchOpen(!searchOpen); if (searchOpen) { setQuery(""); void scan(0, false, ""); } }}><Search/></Button></TooltipTrigger><TooltipContent>{searchOpen ? "ปิดการค้นหา" : "ค้นหา"}</TooltipContent></Tooltip><Button onClick={() => { if (scanning) stopScan(); else { void scan(0, false, query); void loadPulse(); } }} className={`scan-button ${scanning ? "stop-scan" : ""}`}>{scanning ? <Square/> : <RefreshCw/>}{scanning ? "หยุดสแกน" : "สแกนตลาดตอนนี้"}</Button></div>}
           </header>
 
           <div className="content">
@@ -257,7 +271,7 @@ export default function Home() {
               <section className="scanner-panel">
                 <div className="panel-head"><div><p className="section-kicker">{viewMode === "watchlist" ? <Star/> : <Radar/>} {viewMode === "watchlist" ? "MY WATCHLIST" : theme === "dividend" ? "DIVIDEND + TECHNICAL SCANNER" : "MULTI-ASSET SCANNER"}</p><h2>{viewMode === "watchlist" ? "รายการที่ติดตาม" : `โอกาสใน ${marketMeta.label}`} <span>{filtered.length}</span></h2></div><div className="filters"><div className="universe-chip"><Globe2/><span>{marketMeta.label}<small>{scanned || "—"} สินทรัพย์ · {marketMeta.currency}</small></span></div><Select value={timeframe} onValueChange={setTimeframe}><SelectTrigger aria-label="เลือกกรอบเวลา"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="multi">MTF · D1 / H4 / H1</SelectItem><SelectItem value="day">กรอบวัน (1D)</SelectItem><SelectItem value="hour">60 นาที</SelectItem><SelectItem value="15m">15 นาที</SelectItem></SelectContent></Select><Sheet><SheetTrigger asChild><Button variant="outline" className={minScore > 0 || stateFilter !== "ALL" ? "filter-active" : ""}><ListFilter/> ตัวกรอง{(minScore > 0 || stateFilter !== "ALL") && <span className="filter-dot"/>}</Button></SheetTrigger><SheetContent className="filter-sheet"><SheetHeader><SheetTitle>ตัวกรองสัญญาณ</SheetTitle><SheetDescription>เลือกเฉพาะสินทรัพย์ที่ตรงเกณฑ์การตัดสินใจ</SheetDescription></SheetHeader><div className="filter-body"><label>คะแนนขั้นต่ำ</label><div className="filter-options">{[0, 60, 70, 80].map((value) => <Button key={value} variant={minScore === value ? "default" : "outline"} onClick={() => setMinScore(value)}>{value === 0 ? "ทั้งหมด" : `${value}+`}</Button>)}</div><label>สถานะการตัดสินใจ</label><div className="filter-options vertical">{[["ALL", "ทุกสถานะ"], ["TRADE", "TRADE · เข้าเกณฑ์"], ["WAIT", "WAIT · รอยืนยัน"], ["NO_TRADE", "NO TRADE · งดเทรด"]].map(([value, label]) => <Button key={value} variant={stateFilter === value ? "default" : "outline"} onClick={() => setStateFilter(value)}>{label}</Button>)}</div><div className="filter-summary">พบตามเงื่อนไข <b>{filtered.length}</b> ตัว</div><Button variant="outline" onClick={() => { setMinScore(0); setStateFilter("ALL"); }}>ล้างตัวกรอง</Button></div></SheetContent></Sheet></div></div>
                 <div className="signal-tabs" role="tablist" aria-label="ประเภทสัญญาณ">{["ทั้งหมด", "Breakout", "Pullback", "Momentum"].map((item) => <button key={item} role="tab" aria-selected={signal === item} className={signal === item ? "selected" : ""} onClick={() => setSignal(item)}>{item}{item !== "ทั้งหมด" && <span>{displayStocks.filter((stock) => stock.signal === item).length}</span>}</button>)}</div>
-                {marketKey === "thai" && theme === "core" && thaiUniverse === "all" && <div className="batch-toolbar"><div><b>จักรวาลหุ้นไทย {universeMeta.total.toLocaleString("th-TH")} ตัว</b><span>โหลดแล้ว {scanned.toLocaleString("th-TH")} ตัว · ชุด {batch + 1}/{universeMeta.totalBatches}</span></div><div className="batch-progress"><i style={{ width: `${Math.min(100, (batch + 1) / universeMeta.totalBatches * 100)}%` }}/></div><Button variant="outline" disabled={scanning || batch + 1 >= universeMeta.totalBatches || !!query} onClick={() => void scan(batch + 1, true, "")}>{scanning ? "กำลังโหลด" : "โหลดชุดถัดไป"}<ChevronRight/></Button></div>}
+                {marketKey === "thai" && theme === "core" && thaiUniverse === "all" && <div className="batch-toolbar"><div><b>จักรวาลหุ้นไทย {universeMeta.total.toLocaleString("th-TH")} ตัว</b><span>{scanning ? "กำลังโหลดอัตโนมัติ" : batch + 1 >= universeMeta.totalBatches ? "สแกนครบแล้ว" : "หยุดไว้ชั่วคราว"} · สำเร็จ {scanned.toLocaleString("th-TH")} ตัว · ชุด {batch + 1}/{universeMeta.totalBatches}</span></div><div className="batch-progress"><i style={{ width: `${Math.min(100, (batch + 1) / universeMeta.totalBatches * 100)}%` }}/></div><strong>{Math.round(Math.min(100, (batch + 1) / universeMeta.totalBatches * 100))}%</strong></div>}
                 <div className="table-wrap"><Table><TableHeader><TableRow><SortableHead label="อันดับ / สินทรัพย์" sortKey="symbol" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="ราคาล่าสุด" sortKey="price" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-right"/><SortableHead label="สัญญาณ" sortKey="signal" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="แนวโน้ม" sortKey="trend" activeKey={sort.key} direction={sort.direction} onSort={changeSort}/><SortableHead label="RSI" sortKey="rsi" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><SortableHead label={theme === "dividend" ? "Yield TTM" : "Volume"} sortKey="metric" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><SortableHead label="คะแนน" sortKey="score" activeKey={sort.key} direction={sort.direction} onSort={changeSort} className="text-center"/><TableHead/></TableRow></TableHeader><TableBody>
                   {scanning && !displayStocks.length && <TableRow><TableCell colSpan={8}><div className="scan-loading"><RefreshCw className="spin"/><b>กำลังสแกน {marketOptions.find((option) => option.key === marketKey)?.sub}</b><span>ประมวลผล D1 / H4 / H1 และโครงสร้างราคา</span></div></TableCell></TableRow>}
                   {filtered.map((stock, index) => <TableRow key={stock.symbol} data-state={selected?.symbol === stock.symbol ? "selected" : undefined} onClick={() => setSelectedSymbol(stock.symbol)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && setSelectedSymbol(stock.symbol)}><TableCell><div className="stock-name"><span className="rank">{String(index + 1).padStart(2, "0")}</span><div className="ticker-logo">{stock.symbol.slice(0, 2)}</div><div><b>{stock.symbol}</b><small>{stock.sector}</small></div></div></TableCell><TableCell className="text-right"><b>{fmtPrice(stock.price)}</b><small className={stock.change >= 0 ? "positive block" : "negative block"}>{stock.change >= 0 ? "+" : ""}{stock.change.toFixed(2)}% · {stock.currency ?? marketMeta.currency}</small></TableCell><TableCell><span className={`tag ${stock.signal.toLowerCase()}`}>{stock.signal}</span></TableCell><TableCell>{stock.mtf ? <div className="mtf-compact"><BiasBadge label="D1" {...stock.mtf.d1} compact/><BiasBadge label="H4" {...stock.mtf.h4} compact/><BiasBadge label="H1" {...stock.mtf.h1} compact/></div> : <span className="trend-cell">{stock.change >= 0 ? <TrendingUp/> : <TrendingDown/>}{stock.trend}</span>}</TableCell><TableCell className="text-center"><b>{stock.rsi}</b><span className="rsi-bar"><i style={{ width: `${stock.rsi}%` }}/></span></TableCell><TableCell className="text-center">{theme === "dividend" ? <span className="yield-value"><b>{(stock.dividendYield ?? 0).toFixed(2)}%</b><small>{fmtPrice(stock.annualDividend ?? 0)} / ปี</small></span> : <b className={stock.volume >= 1.5 ? "positive" : ""}>{stock.volume.toFixed(1)}x</b>}</TableCell><TableCell className="text-center"><span className={`score ${stock.score >= 80 ? "high" : stock.score >= 65 ? "mid" : "low"}`}>{stock.score}</span></TableCell><TableCell><div className="row-actions"><Button variant="ghost" size="icon-xs" aria-label={`${isWatched(stock) ? "นำออกจาก" : "เพิ่มใน"}รายการติดตาม`} onClick={(event) => { event.stopPropagation(); toggleWatch(stock); }}><Star className={isWatched(stock) ? "starred" : ""}/></Button><ChevronRight className="row-arrow"/></div></TableCell></TableRow>)}
