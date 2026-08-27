@@ -101,14 +101,28 @@ const brandLogoSlugs: Record<string, string> = {
   NVDA: "nvidia", MSFT: "microsoft", AAPL: "apple", AMZN: "amazon", GOOGL: "google", META: "meta",
   TSLA: "tesla", TSM: "tsmc", ASML: "asml", JPM: "jpmorganchase", V: "visa", WMT: "walmart", BABA: "alibabadotcom",
 };
+const thaiLogoDomains: Record<string, string> = {
+  ADVANC: "ais.th", AOT: "airportthai.co.th", BDMS: "bdms.co.th", BH: "bumrungrad.com",
+  CPALL: "cpall.co.th", CPF: "cpfworldwide.com", DELTA: "deltathailand.com", EA: "energyabsolute.co.th",
+  GULF: "gulf.co.th", KBANK: "kasikornbank.com", KTB: "krungthai.com", MINT: "minor.com",
+  PTT: "pttplc.com", PTTEP: "pttep.com", SCB: "scb.co.th", TOP: "thaioilgroup.com", TRUE: "truecorp.co.th",
+  TISCO: "tisco.co.th", KKP: "bankkkp.com", RATCH: "ratch.co.th", EGCO: "egco.com",
+  AP: "apthai.com", SPALI: "supalai.com", LH: "lh.co.th", WHAUP: "whaup.com",
+};
 function AssetIcon({ stock, fallbackMarket, large = false }: { stock: Stock; fallbackMarket: MarketKey; large?: boolean }) {
   const market = stock.marketKey ?? fallbackMarket;
   const slug = market === "crypto" || market === "global" ? brandLogoSlugs[stock.symbol] : undefined;
+  const thaiDomain = market === "thai" ? thaiLogoDomains[stock.symbol] : undefined;
+  const logoUrl = slug
+    ? `https://cdn.simpleicons.org/${slug}?viewbox=auto`
+    : thaiDomain
+      ? `https://www.google.com/s2/favicons?domain_url=https://${thaiDomain}&sz=128`
+      : undefined;
   const FallbackIcon = market === "crypto" ? Bitcoin : market === "etf" ? Layers3 : market === "global" ? Building2 : CandlestickChart;
-  return <div className={`ticker-logo asset-icon ${market} ${large ? "large" : ""}`} title={`${stock.symbol} · ${stock.name}`}>
+  return <div className={`ticker-logo asset-icon ${market} ${thaiDomain ? "thai-brand" : ""} ${large ? "large" : ""}`} title={`${stock.symbol} · ${stock.name}`}>
     <FallbackIcon className="asset-category-icon"/>
-    {slug && (
-      <img src={`https://cdn.simpleicons.org/${slug}?viewbox=auto`} alt={`${stock.symbol} logo`} loading="lazy" decoding="async" onError={(event) => { event.currentTarget.style.display = "none"; }}/>
+    {logoUrl && (
+      <img src={logoUrl} alt={`${stock.symbol} logo`} loading="lazy" decoding="async" onError={(event) => { event.currentTarget.style.display = "none"; }}/>
     )}
   </div>;
 }
