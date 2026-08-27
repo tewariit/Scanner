@@ -1,4 +1,5 @@
 import { analyze, detectStructure, fetchChart, marketUniverses, resampleFourHour, structureEntryScore, type Candle, type MarketUniverseKey } from "@/lib/technical-engine";
+import { thaiAllUniverse } from "@/lib/thai-universe";
 
 type Trade = {
   symbol: string; signal: "MTF Pullback"; score: number; entryTime: number; exitTime: number;
@@ -134,7 +135,12 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const market = resolveMarket(params.get("market"));
   const meta = marketMeta[market];
-  const instruments = marketUniverses[market];
+  const requestedSymbol = (params.get("symbol") ?? "").trim().toUpperCase();
+  const selectedThaiInstrument = market === "thai" && requestedSymbol ? thaiAllUniverse.find(([symbol]) => symbol === requestedSymbol) : null;
+  if (market === "thai" && requestedSymbol && !selectedThaiInstrument) {
+    return Response.json({ error: `ไม่พบ ${requestedSymbol} ในจักรวาลหุ้นไทย 537 ตัว` }, { status: 400, headers: { "Cache-Control": "no-store" } });
+  }
+  const instruments = selectedThaiInstrument ? [selectedThaiInstrument] : marketUniverses[market];
   const months = [3, 6, 12].includes(Number(params.get("months"))) ? Number(params.get("months")) : 12;
   const minScore = [60, 70, 80].includes(Number(params.get("score"))) ? Number(params.get("score")) : 70;
   const cutoff = Math.floor(Date.now() / 1000) - months * 30.4375 * 86400;
@@ -159,7 +165,7 @@ export async function GET(request: Request) {
     const trades = selectPortfolio(candidates, minScore);
     const comparisons = [60, 70, 80].map((score) => ({ score, ...metrics(selectPortfolio(candidates, score)) }));
     return Response.json({
-      market: { key: market, label: meta.label, assetLabel: meta.assetLabel },
+      market: { key: market, label: selectedThaiInstrument ? `${meta.label} · ${selectedThaiInstrument[0]}` : meta.label, assetLabel: meta.assetLabel },
       assumptions: { months, timeframe: "D1 / H4 / H1", minScore, rr: 2, atrStop: 1.2, maxTradesPerDay: 2, holdingBars: HOLDING_BARS, feeRate: FEE_RATE, entry: "next_h1_open", sameBarRule: "stop_first", structure: "CHoCH → BOS → Pullback" },
       coverage: { requested: instruments.length, succeeded: results.length }, funnel,
       metrics: metrics(trades), comparisons, bySignal: groupMetrics(trades, "signal"), byStock: groupMetrics(trades, "symbol").slice(0, 10),
