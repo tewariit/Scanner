@@ -65,7 +65,10 @@ function generateCandidates(symbol: string, name: string, sector: string, hourly
 
   for (let index = 120; index < hourly.length - 1; index += 1) {
     const time = hourly[index].time;
-    const h1Candles = hourly.slice(0, index + 1);
+    // EMA200 and H4 need recent history, not every H1 bar since the start of
+    // the dataset. Capping the rolling window avoids quadratic work on 24/7
+    // crypto data (8,000+ H1 bars/year) without changing the signal rules.
+    const h1Candles = hourly.slice(Math.max(0, index - 259), index + 1);
     const structure = detectStructure(h1Candles);
     const isFreshReady = structure.stage === "ENTRY_READY" && !wasReady;
     wasReady = structure.stage === "ENTRY_READY";
@@ -73,7 +76,7 @@ function generateCandidates(symbol: string, name: string, sector: string, hourly
     funnel.structureReady += 1;
 
     const currentDay = marketDate(time, timeZone);
-    const d1Candles = daily.filter((candle) => marketDate(candle.time, timeZone) < currentDay);
+    const d1Candles = daily.filter((candle) => marketDate(candle.time, timeZone) < currentDay).slice(-260);
     const h4Candles = resampleFourHour(h1Candles);
     if (d1Candles.length < 55 || h4Candles.length < 55 || h1Candles.length < 55) continue;
     const d1 = analyze(symbol, name, sector, d1Candles);
@@ -131,6 +134,27 @@ function groupMetrics(trades: Trade[], key: "signal" | "symbol") {
   return [...new Set(trades.map((trade) => trade[key]))].map((value) => ({ name: value, ...metrics(trades.filter((trade) => trade[key] === value)) })).sort((a, b) => b.expectancy - a.expectancy);
 }
 
+async function withRetry<T>(task: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try { return await task(); }
+    catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+async function settleWithLimit<T, R>(items: readonly T[], worker: (item: T) => Promise<R>, concurrency = 3) {
+  const settled: PromiseSettledResult<R>[] = [];
+  for (let index = 0; index < items.length; index += concurrency) {
+    settled.push(...await Promise.allSettled(items.slice(index, index + concurrency).map((item) => withRetry(() => worker(item)))));
+    if (index + concurrency < items.length) await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+  return settled;
+}
+
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const market = resolveMarket(params.get("market"));
@@ -145,16 +169,16 @@ export async function GET(request: Request) {
   const minScore = [60, 70, 80].includes(Number(params.get("score"))) ? Number(params.get("score")) : 70;
   const cutoff = Math.floor(Date.now() / 1000) - months * 30.4375 * 86400;
   try {
-    const settled = await Promise.allSettled(instruments.map(async ([symbol, ticker, name, sector]) => {
+    const settled = await settleWithLimit(instruments, async ([symbol, ticker, name, sector]) => {
       const [hourly, daily] = await Promise.all([
         fetchChart(ticker, "60m", "1y", 3600),
         fetchChart(ticker, "1d", "2y", 3600),
       ]);
       if (hourly.length < 180 || daily.length < 120) throw new Error("insufficient MTF history");
       return generateCandidates(symbol, name, sector, hourly, daily, cutoff, meta.timeZone);
-    }));
+    }, selectedThaiInstrument ? 1 : 3);
     const results = settled.flatMap((item) => item.status === "fulfilled" ? [item.value] : []);
-    if (results.length < Math.min(5, instruments.length)) throw new Error(`ผู้ให้บริการข้อมูลตอบกลับไม่เพียงพอสำหรับ Backtest ${meta.label}`);
+    if (results.length < Math.min(5, instruments.length)) throw new Error(`Yahoo ตอบกลับสำเร็จ ${results.length}/${instruments.length} ${meta.assetLabel} — กรุณารอสักครู่แล้วลองใหม่`);
     const candidates = results.flatMap((item) => item.candidates);
     const funnel = results.reduce((sum, item) => ({
       structureReady: sum.structureReady + item.funnel.structureReady,
