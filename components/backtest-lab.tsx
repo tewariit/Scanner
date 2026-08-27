@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, CheckCircle2, FlaskConical, RefreshCw, ShieldCheck, TrendingDown, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { thaiAllUniverse } from "@/lib/thai-universe";
 
 type Metric = { total: number; wins: number; losses: number; winRate: number; netR: number; expectancy: number; profitFactor: number; maxDrawdown: number; averageWin: number; averageLoss: number; equityCurve: Array<{ time: number; equity: number }> };
 type GroupMetric = Metric & { name: string };
@@ -42,6 +44,8 @@ export function BacktestLab() {
   const [market, setMarket] = useState<MarketKey>("thai");
   const [months, setMonths] = useState("12");
   const [score, setScore] = useState("70");
+  const [thaiScope, setThaiScope] = useState<"leaders" | "single">("leaders");
+  const [assetSymbol, setAssetSymbol] = useState("");
   const [data, setData] = useState<BacktestData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -49,7 +53,9 @@ export function BacktestLab() {
   async function runBacktest() {
     setLoading(true); setError("");
     try {
-      const response = await fetch(`/api/backtest?market=${market}&months=${months}&score=${score}`, { cache: "no-store" });
+      if (market === "thai" && thaiScope === "single" && !assetSymbol.trim()) throw new Error("กรุณาพิมพ์ Symbol หุ้นไทยที่ต้องการทดสอบ");
+      const params = new URLSearchParams({ market, months, score, ...(market === "thai" && thaiScope === "single" ? { symbol: assetSymbol.trim().toUpperCase() } : {}) });
+      const response = await fetch(`/api/backtest?${params}`, { cache: "no-store" });
       const result = await response.json() as BacktestData & { error?: string };
       if (!response.ok) throw new Error(result.error || "ไม่สามารถประมวลผล Backtest ได้");
       setData(result);
@@ -61,7 +67,7 @@ export function BacktestLab() {
   const bestSignal = useMemo(() => data?.bySignal[0], [data]);
 
   return <section className="backtest-lab">
-    <div className="backtest-hero"><div><p className="section-kicker"><FlaskConical/> MTF WALK-FORWARD SIMULATION</p><h2>Backtest Lab <span>MTF Beta</span></h2><p>ทดสอบกฎเดียวกับ Scanner ครบทั้งหุ้นไทย หุ้นโลก ETF / กองทุน และคริปโต</p></div><div className="backtest-controls"><Select value={market} onValueChange={(value) => setMarket(value as MarketKey)}><SelectTrigger aria-label="เลือกตลาดสำหรับ Backtest"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="thai">หุ้นไทย · 17</SelectItem><SelectItem value="global">หุ้นโลก · 16</SelectItem><SelectItem value="etf">ETF / กองทุน · 16</SelectItem><SelectItem value="crypto">คริปโต · 12</SelectItem></SelectContent></Select><Select value={months} onValueChange={setMonths}><SelectTrigger aria-label="ระยะเวลาทดสอบ"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="3">ย้อนหลัง 3 เดือน</SelectItem><SelectItem value="6">ย้อนหลัง 6 เดือน</SelectItem><SelectItem value="12">ย้อนหลัง 12 เดือน</SelectItem></SelectContent></Select><Select value={score} onValueChange={setScore}><SelectTrigger aria-label="คะแนนขั้นต่ำ"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="60">คะแนน 60+</SelectItem><SelectItem value="70">คะแนน 70+</SelectItem><SelectItem value="80">คะแนน 80+</SelectItem></SelectContent></Select><Button onClick={() => void runBacktest()} disabled={loading}><RefreshCw className={loading ? "spin" : ""}/>{loading ? "กำลังคำนวณ" : "เริ่มทดสอบ"}</Button></div></div>
+    <div className="backtest-hero"><div><p className="section-kicker"><FlaskConical/> MTF WALK-FORWARD SIMULATION</p><h2>Backtest Lab <span>MTF Beta</span></h2><p>ทดสอบกฎเดียวกับ Scanner ครบทั้งหุ้นไทย หุ้นโลก ETF / กองทุน และคริปโต</p></div><div className="backtest-controls"><Select value={market} onValueChange={(value) => { setMarket(value as MarketKey); setAssetSymbol(""); }}><SelectTrigger aria-label="เลือกตลาดสำหรับ Backtest"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="thai">หุ้นไทย · 537</SelectItem><SelectItem value="global">หุ้นโลก · 16</SelectItem><SelectItem value="etf">ETF / กองทุน · 16</SelectItem><SelectItem value="crypto">คริปโต · 12</SelectItem></SelectContent></Select>{market === "thai" && <Select value={thaiScope} onValueChange={(value) => setThaiScope(value as "leaders" | "single")}><SelectTrigger aria-label="เลือกรูปแบบสินทรัพย์หุ้นไทย"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="leaders">ชุดผู้นำ · 17 ตัว</SelectItem><SelectItem value="single">เลือกหุ้นรายตัว · 537 ตัว</SelectItem></SelectContent></Select>}{market === "thai" && thaiScope === "single" && <div className="asset-symbol-input"><Input list="thai-backtest-symbols" value={assetSymbol} onChange={(event) => setAssetSymbol(event.target.value.toUpperCase())} placeholder="Symbol เช่น ADVANC" aria-label="ค้นหา Symbol หุ้นไทย"/><datalist id="thai-backtest-symbols">{thaiAllUniverse.map(([symbol, , name]) => <option key={symbol} value={symbol}>{name}</option>)}</datalist></div>}<Select value={months} onValueChange={setMonths}><SelectTrigger aria-label="ระยะเวลาทดสอบ"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="3">ย้อนหลัง 3 เดือน</SelectItem><SelectItem value="6">ย้อนหลัง 6 เดือน</SelectItem><SelectItem value="12">ย้อนหลัง 12 เดือน</SelectItem></SelectContent></Select><Select value={score} onValueChange={setScore}><SelectTrigger aria-label="คะแนนขั้นต่ำ"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="60">คะแนน 60+</SelectItem><SelectItem value="70">คะแนน 70+</SelectItem><SelectItem value="80">คะแนน 80+</SelectItem></SelectContent></Select><Button onClick={() => void runBacktest()} disabled={loading}><RefreshCw className={loading ? "spin" : ""}/>{loading ? "กำลังคำนวณ" : "เริ่มทดสอบ"}</Button></div></div>
 
     {error && <div className="backtest-alert error"><AlertTriangle/><div><b>ประมวลผลไม่สำเร็จ</b><p>{error} · ลองใหม่อีกครั้งเมื่อผู้ให้บริการข้อมูลพร้อม</p></div></div>}
     {loading && !data ? <div className="backtest-loading">{Array.from({length:6}).map((_,index)=><Skeleton key={index} className="h-28 rounded-xl bg-[#172129]"/>)}</div> : data && <>
